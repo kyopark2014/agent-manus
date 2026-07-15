@@ -55,6 +55,56 @@ def get_status_msg(status):
         status = " -> ".join(status_msg)
         return "[status]\n" + status
 
+def _sanitize_reference_text(text: str, max_len: int) -> str:
+    """Collapse whitespace/newlines and strip markdown that breaks list links."""
+    if not text:
+        return ""
+    cleaned = " ".join(str(text).replace("\r", "\n").split())
+    cleaned = cleaned.replace("```", "`").replace("[", "\\[").replace("]", "\\]")
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 3].rstrip(" .") + "..."
+    return cleaned
+
+
+def _format_references_markdown(references: list) -> str:
+    """Build a Reference section safe for markdown list rendering."""
+    lines = ["\n\n### Reference"]
+    for i, reference in enumerate(references, start=1):
+        title = _sanitize_reference_text(reference.get("title") or "Untitled", 120)
+        content = _sanitize_reference_text(reference.get("content") or "", 100)
+        url = (reference.get("url") or "").strip()
+        page = reference.get("page")
+        page_suffix = f" , {page} page" if page is not None else ""
+        if url:
+            lines.append(
+                f"{i}. [{title}]({url}){page_suffix} — {content}" if content
+                else f"{i}. [{title}]({url}){page_suffix}"
+            )
+        else:
+            lines.append(
+                f"{i}. {title}{page_suffix} — {content}" if content
+                else f"{i}. {title}{page_suffix}"
+            )
+    return "\n".join(lines) + "\n"
+
+
+
+
+def _build_tool_reference(ref_item: dict) -> dict:
+    """Build a display reference from a RAG doc item."""
+    reference = ref_item.get("reference") or {}
+    contents = ref_item.get("contents") or ""
+    content_text = contents[:100] + "..." if len(contents) > 100 else contents
+    result = {
+        "url": reference.get("url"),
+        "title": reference.get("title"),
+        "content": content_text,
+    }
+    if reference.get("page") is not None:
+        result["page"] = reference["page"]
+    return result
+
+
 def get_tool_info(tool_name, tool_content):
     tool_references = []    
     urls = []
@@ -270,14 +320,7 @@ def get_tool_info(tool_name, tool_content):
             for item in json_data:
                 logger.info(f"item: {item}")
                 if "reference" in item and "contents" in item:
-                    url = item["reference"]["url"]
-                    title = item["reference"]["title"]
-                    content_text = item["contents"][:100] + "..." if len(item["contents"]) > 100 else item["contents"]
-                    tool_references.append({
-                        "url": url,
-                        "title": title,
-                        "content": content_text
-                    })
+                    tool_references.append(_build_tool_reference(item))
             logger.info(f"tool_references: {tool_references}")
 
         except json.JSONDecodeError:
@@ -564,10 +607,7 @@ async def run_agent(query, historyMode, containers):
     logger.info(f"result: {final_output}")
     logger.info(f"references: {references}")
     if references:
-        ref = "\n\n### Reference\n"
-        for i, reference in enumerate(references):
-            ref += f"{i+1}. [{reference['title']}]({reference['url']}), {reference['content']}...\n"    
-        result += ref
+        result += _format_references_markdown(references)
 
     image_url = final_output["image_url"] if final_output and "image_url" in final_output else []
 

@@ -21,12 +21,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mcp-basic")
 
+_KOREAN_WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
+
 def get_current_time(format: str=f"%Y-%m-%d %H:%M:%S")->str:
-    """Returns the current date and time in the specified format"""
-    # f"%Y-%m-%d %H:%M:%S"
-    
+    """Returns the current date and time in Asia/Seoul, including the Korean weekday.
+
+    Example: "2026-08-08 15:51:06 (토요일)"
+    """
     format = format.replace('\'','')
-    timestr = datetime.datetime.now(timezone('Asia/Seoul')).strftime(format)
+    now = datetime.datetime.now(timezone('Asia/Seoul'))
+    timestr = f"{now.strftime(format)} ({_KOREAN_WEEKDAYS[now.weekday()]})"
     logger.info(f"timestr: {timestr}")
     
     return timestr

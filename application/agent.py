@@ -2,22 +2,22 @@ import logging
 import sys
 import json
 import traceback
-import chat
-import utils
+
+try:
+    from application import chat, utils
+except ImportError:
+    import chat
+    import utils
 
 from langgraph.prebuilt import ToolNode
 from typing import Literal
 from langgraph.graph import START, END, StateGraph
 from typing_extensions import Annotated, TypedDict
 from langgraph.graph.message import add_messages
-from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import ToolNode
-from typing import Literal
-from langgraph.graph import START, END, StateGraph
-from typing_extensions import Annotated, TypedDict
-from langgraph.graph.message import add_messages
 
 logging.basicConfig(
     level=logging.INFO,  
@@ -37,12 +37,148 @@ status_msg = []
 response_msg = []
 references = []
 image_urls = []
-
 index = 0
+
+
+def _notification_queue(container):
+    if not isinstance(container, dict):
+        return None
+    nq = container.get("notification_queue")
+    if nq is None:
+        conf = container.get("configurable") or {}
+        nq = conf.get("notification_queue")
+    return nq
+
+
 def add_notification(container, message):
+    """Show progress via chat._notify_stream (same as agent-skills)."""
     global index
-    container['notification'][index].info(message)
+    nq = _notification_queue(container)
+    text = message if isinstance(message, str) else str(message)
+    chat._notify_stream(nq, text)
     index += 1
+
+
+def _extract_message_text(content) -> str:
+    """Pull plain text from AIMessage content (str or content blocks)."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+            else:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(str(text))
+        return "\n".join(p for p in parts if p).strip()
+    return str(content).strip()
+
+
+def _format_tool_result_payload(content) -> str:
+    """Normalize tool result content for Tool Result: SSE mapping."""
+    if content is None:
+        return ""
+    if isinstance(content, (dict, list)):
+        if isinstance(content, list):
+            texts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(str(block.get("text") or ""))
+                elif isinstance(block, str):
+                    texts.append(block)
+            if texts:
+                return "\n\n".join(texts)
+        return json.dumps(content, ensure_ascii=False, default=str)
+
+    text = str(content)
+    try:
+        import ast
+
+        parsed = ast.literal_eval(text)
+        if isinstance(parsed, list):
+            texts = []
+            for block in parsed:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(str(block.get("text") or ""))
+                elif isinstance(block, str):
+                    texts.append(block)
+            if texts:
+                return "\n\n".join(texts)
+            return json.dumps(parsed, ensure_ascii=False, default=str)
+        if isinstance(parsed, dict):
+            return json.dumps(parsed, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+    return text
+
+
+def _tool_call_fields(tool_call) -> tuple[str, object, str]:
+    """Extract (name, args, id) from a dict or LangChain tool_call object."""
+    if isinstance(tool_call, dict):
+        name = tool_call.get("name") or ""
+        args = tool_call.get("args")
+        tid = tool_call.get("id") or ""
+        if not name and isinstance(tool_call.get("function"), dict):
+            fn = tool_call["function"]
+            name = fn.get("name") or ""
+            if args is None:
+                args = fn.get("arguments")
+    else:
+        name = getattr(tool_call, "name", None) or ""
+        args = getattr(tool_call, "args", None)
+        tid = getattr(tool_call, "id", None) or ""
+        fn = getattr(tool_call, "function", None)
+        if not name and fn is not None:
+            name = getattr(fn, "name", None) or (fn.get("name") if isinstance(fn, dict) else "") or ""
+            if args is None:
+                args = getattr(fn, "arguments", None) or (fn.get("arguments") if isinstance(fn, dict) else None)
+    if args is None:
+        args = {}
+    return str(name), args, str(tid)
+
+
+def notify_tool_call(containers, tool_use_id: str, tool_name: str, tool_args) -> None:
+    """Emit Tool: / Input: so routes_chat maps it to a tool card."""
+    nq = _notification_queue(containers)
+    if nq is None or not tool_name:
+        return
+    tid = tool_use_id or tool_name
+    nq.register_tool(tid, tool_name)
+    if isinstance(tool_args, (dict, list)):
+        input_str = json.dumps(tool_args, ensure_ascii=False, default=str)
+    else:
+        input_str = str(tool_args)
+    chat._notify_tool(nq, tid, f"Tool: {tool_name}, Input: {input_str}")
+
+
+def notify_tool_result(containers, tool_use_id: str, tool_name: str, tool_content) -> None:
+    """Emit Tool Result: so routes_chat maps it to a tool_result card."""
+    nq = _notification_queue(containers)
+    if nq is None:
+        return
+    tid = tool_use_id or tool_name or "tool"
+    if tool_name:
+        nq.register_tool(tid, tool_name)
+    payload = _format_tool_result_payload(tool_content)
+    chat._notify_tool(nq, tid, f"Tool Result: {payload}")
+
+
+def _trailing_tool_messages(messages: list) -> list:
+    """Collect consecutive ToolMessages at the end of the message list."""
+    trailing = []
+    for msg in reversed(messages or []):
+        if isinstance(msg, ToolMessage):
+            trailing.append(msg)
+        else:
+            break
+    trailing.reverse()
+    return trailing
 
 def get_status_msg(status):
     global status_msg
@@ -332,7 +468,7 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
     image_url: list
 
-async def call_model(state: State, config):
+async def call_model(state: State, config: RunnableConfig):
     logger.info(f"###### call_model ######")
 
     last_message = state['messages'][-1]
@@ -345,45 +481,53 @@ async def call_model(state: State, config):
     tools = config.get("configurable", {}).get("tools", None)
     system_prompt = config.get("configurable", {}).get("system_prompt", None)
     
-    if isinstance(last_message, ToolMessage):
-        tool_name = last_message.name
-        tool_content = last_message.content
-        logger.info(f"tool_name: {tool_name}, content: {tool_content[:800]}")
+    # Parallel ToolNode can append several ToolMessages; notify each one.
+    trailing_tools = _trailing_tool_messages(state["messages"])
+    if trailing_tools:
+        global references
+        messages = list(state["messages"])
+        start_idx = len(messages) - len(trailing_tools)
+        for offset, tool_msg in enumerate(trailing_tools):
+            tool_name = tool_msg.name
+            tool_content = tool_msg.content
+            tool_use_id = getattr(tool_msg, "tool_call_id", None) or tool_name
+            content_preview = str(tool_content)[:800]
+            logger.info(f"tool_name: {tool_name}, content: {content_preview}")
 
-        if chat.debug_mode == "Enable":
-            add_notification(containers, f"{tool_name}: {str(tool_content)}")
+            notify_tool_result(containers, tool_use_id, tool_name, tool_content)
             response_msg.append(f"{tool_name}: {str(tool_content)}")
 
-        global references
-        content, urls, refs = get_tool_info(tool_name, tool_content)
-        if refs:
-            for r in refs:
-                references.append(r)
-            logger.info(f"refs: {refs}")
-        if urls:
-            for url in urls:
-                image_url.append(url)
-            logger.info(f"urls: {urls}")
+            content, urls, refs = get_tool_info(tool_name, tool_content)
+            if refs:
+                for r in refs:
+                    references.append(r)
+                logger.info(f"refs: {refs}")
+            if urls:
+                for url in urls:
+                    image_url.append(url)
+                logger.info(f"urls: {urls}")
+                if chat.debug_mode == "Enable":
+                    add_notification(containers, f"Added path to image_url: {urls}")
+                    response_msg.append(f"Added path to image_url: {urls}")
 
-            if chat.debug_mode == "Enable":
-                add_notification(containers, f"Added path to image_url: {urls}")
-                response_msg.append(f"Added path to image_url: {urls}")
-
-        if content:  # manupulate the output of tool message
-            messages = state["messages"]
-            messages[-1] = ToolMessage(
-                name=tool_name,
-                tool_call_id=last_message.tool_call_id,
-                content=content
-            )
-            state["messages"] = messages
+            if content:
+                messages[start_idx + offset] = ToolMessage(
+                    name=tool_name,
+                    tool_call_id=tool_msg.tool_call_id,
+                    content=content,
+                )
+        state["messages"] = messages
 
     if isinstance(last_message, AIMessage) and last_message.content:
-        if chat.debug_mode == "Enable":
-            containers['status'].info(get_status_msg(f"{last_message.name}"))
-            add_notification(containers, f"{last_message.content}")
-            response_msg.append(last_message.content)    
-    
+        # Tool calls are notified after the model responds; only stream plain text here.
+        if chat.debug_mode == "Enable" and not getattr(last_message, "tool_calls", None):
+            if containers and containers.get("status"):
+                containers["status"].info(get_status_msg(f"{last_message.name}"))
+            text = _extract_message_text(last_message.content)
+            if text:
+                add_notification(containers, text)
+                response_msg.append(text)
+
     if system_prompt:
         system = system_prompt
     else:
@@ -405,7 +549,7 @@ async def call_model(state: State, config):
             ]
         )
         chain = prompt | model
-            
+
         response = await chain.ainvoke(state["messages"])
         logger.info(f"response of call_model: {response}")
 
@@ -415,43 +559,56 @@ async def call_model(state: State, config):
         err_msg = traceback.format_exc()
         logger.info(f"error message: {err_msg}")
 
-    return {"messages": [response], "image_url": image_url, "index": index}
+    # Emit Tool: here (agent node always gets config). should_continue may miss config.
+    if isinstance(response, AIMessage) and getattr(response, "tool_calls", None):
+        for tool_call in response.tool_calls:
+            tool_name, tool_args, tool_use_id = _tool_call_fields(tool_call)
+            if not tool_name:
+                continue
+            tid = tool_use_id or tool_name
+            logger.info(f"notify tool call: {tool_name}, id={tid}, args={tool_args}")
+            notify_tool_call(containers, tid, tool_name, tool_args)
 
-async def should_continue(state: State, config) -> Literal["continue", "end"]:
+    return {"messages": [response], "image_url": image_url}
+
+async def should_continue(state: State, config: RunnableConfig) -> Literal["continue", "end"]:
     logger.info(f"###### should_continue ######")
 
-    messages = state["messages"]    
+    messages = state["messages"]
     last_message = messages[-1]
 
-    containers = config.get("configurable", {}).get("containers", None)
-    
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        tool_name = last_message.tool_calls[-1]['name']
-        logger.info(f"--- CONTINUE: {tool_name} ---")
+    containers = config.get("configurable", {}).get("containers", None) if config else None
 
-        tool_args = last_message.tool_calls[-1]['args']
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        # Backup notify (call_model already emitted). Covers all parallel tool_calls.
+        for tool_call in last_message.tool_calls:
+            tool_name, tool_args, tool_use_id = _tool_call_fields(tool_call)
+            if not tool_name:
+                continue
+            tid = tool_use_id or tool_name
+            logger.info(f"--- CONTINUE: {tool_name} ---")
+            notify_tool_call(containers, tid, tool_name, tool_args)
+
+            if chat.debug_mode == "Enable":
+                if containers and containers.get("status"):
+                    containers["status"].info(get_status_msg(f"{tool_name}"))
+                if isinstance(tool_args, dict) and "code" in tool_args:
+                    logger.info(f"code: {tool_args['code']}")
+                    add_notification(containers, f"{tool_args['code']}")
+                    response_msg.append(f"{tool_args['code']}")
 
         if last_message.content:
-            logger.info(f"last_message: {last_message.content}")
-            if chat.debug_mode == "Enable":
-                add_notification(containers, f"{last_message.content}")
-                response_msg.append(last_message.content)
-
-        logger.info(f"tool_name: {tool_name}, tool_args: {tool_args}")
-        if chat.debug_mode == "Enable":
-            add_notification(containers, f"{tool_name}: {tool_args}")
-        
-        if chat.debug_mode == "Enable":
-            containers['status'].info(get_status_msg(f"{tool_name}"))
-            if "code" in tool_args:
-                logger.info(f"code: {tool_args['code']}")
-                add_notification(containers, f"{tool_args['code']}")
-                response_msg.append(f"{tool_args['code']}")
+            text = _extract_message_text(last_message.content)
+            logger.info(f"last_message: {text}")
+            if chat.debug_mode == "Enable" and text:
+                add_notification(containers, text)
+                response_msg.append(text)
 
         return "continue"
     else:
         if chat.debug_mode == "Enable":
-            containers['status'].info(get_status_msg("end)"))
+            if containers and containers.get("status"):
+                containers["status"].info(get_status_msg("end)"))
 
         logger.info(f"--- END ---")
         return "end"
@@ -546,7 +703,8 @@ async def run_agent(query, historyMode, containers):
     references = []
     
     if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg("(start"))
+        if containers and containers.get('status'):
+            containers['status'].info(get_status_msg("(start"))
 
     server_params = load_multiple_mcp_server_parameters()
     logger.info(f"server_params: {server_params}")
@@ -566,7 +724,7 @@ async def run_agent(query, historyMode, containers):
         app = buildChatAgentWithHistory(tools)
         config = {
             "recursion_limit": 50,
-            "configurable": {"thread_id": chat.userId},
+            "configurable": {"thread_id": getattr(chat, "userId", None) or chat.user_id},
             "containers": containers,
             "tools": tools
         }
@@ -622,24 +780,35 @@ async def run_task(question, tools, system_prompt, containers, historyMode, prev
     response_msg = previous_response_msg
 
     if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg("(start"))
+        if containers and containers.get('status'):
+            containers['status'].info(get_status_msg("(start"))
 
     if historyMode == "Enable":
         app = buildChatAgentWithHistory(tools)
         config = {
             "recursion_limit": 50,
-            "configurable": {"thread_id": chat.userId},
-            "containers": containers,
-            "tools": tools,
-            "system_prompt": system_prompt
+            "configurable": {
+                "thread_id": getattr(chat, "userId", None) or chat.user_id,
+                "containers": containers,
+                "tools": tools,
+                "system_prompt": system_prompt,
+                "notification_queue": (containers or {}).get("notification_queue")
+                if isinstance(containers, dict)
+                else None,
+            },
         }
     else:
         app = buildChatAgent(tools)
         config = {
             "recursion_limit": 50,
-            "containers": containers,
-            "tools": tools,
-            "system_prompt": system_prompt
+            "configurable": {
+                "containers": containers,
+                "tools": tools,
+                "system_prompt": system_prompt,
+                "notification_queue": (containers or {}).get("notification_queue")
+                if isinstance(containers, dict)
+                else None,
+            },
         }
 
     value = None

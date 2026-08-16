@@ -1,0 +1,63 @@
+{
+  "name": "drawio-jsapi",
+  "version": "0.0.6",
+  "description": "TypeScript SDK for creating and manipulating draw.io diagrams",
+  "type": "module",
+  "main": "dist/drawio-jsapi.cjs.js",
+  "module": "dist/drawio-jsapi.esm.js",
+  "browser": "dist/drawio-jsapi.min.js",
+  "types": "dist/drawio-jsapi.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/drawio-jsapi.esm.js",
+      "require": "./dist/drawio-jsapi.cjs.js",
+      "browser": "./dist/drawio-jsapi.min.js",
+      "types": "./dist/drawio-jsapi.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "build:watch": "rollup -c -w",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "prettier --write . && eslint . --ext .js,.ts --fix",
+    "lint:ci": "prettier --check . && eslint . --ext .js,.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "drawio",
+    "draw.io",
+    "diagram",
+    "mxgraph",
+    "flowchart",
+    "architecture",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT-0",
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.10",
+    "pako": "^2.1.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-terser": "^0.4.0",
+    "@rollup/plugin-typescript": "^11.0.0",
+    "@types/node": "^20.0.0",
+    "@types/pako": "^2.0.0",
+    "rollup": "^4.0.0",
+    "rollup-plugin-dts": "^6.0.0",
+    "tslib": "^2.8.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  }
+}

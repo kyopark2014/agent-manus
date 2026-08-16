@@ -1,65 +1,125 @@
-import sys
-import chat
 import json
-import re
-import random
-import string
-import os
-import agent
-import trans
-
-from datetime import datetime
-from typing_extensions import TypedDict
-from manus.stub import ManusAgent
-from typing_extensions import Annotated, TypedDict
-from langgraph.graph.message import add_messages
-
-from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
-from langgraph.constants import START, END
-from langchain_core.tools import BaseTool
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
-from langchain_mcp_adapters.client import MultiServerMCPClient
-
 import logging
+import os
+import random
+import re
+import string
 import sys
-from queue import Queue
+from datetime import datetime
+
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.constants import END
+from langgraph.graph.message import add_messages
+from typing_extensions import Annotated, TypedDict
+
+try:
+    from application import agent, chat, mcp_config, skill, utils
+    from application import langgraph_agent
+    from application.manus.stub import ManusAgent
+    from application.notify_adapter import make_containers
+except ImportError:
+    import agent
+    import chat
+    import mcp_config
+    import skill
+    import utils
+    import langgraph_agent
+    from manus.stub import ManusAgent
+    from notify_adapter import make_containers
 
 logging.basicConfig(
-    level=logging.INFO,  # Default to INFO level
-    format='%(filename)s:%(lineno)d | %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stderr)
-    ]
+    level=logging.INFO,
+    format="%(filename)s:%(lineno)d | %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger("graph-implementation")
 
 status_msg = []
+response_msg = []
+collected_image_urls: list[str] = []
+index = 0
+
+config = utils.load_config()
+s3_bucket = config.get("s3_bucket")
+if s3_bucket is None:
+    raise Exception("No storage!")
+
+
 def get_status_msg(status):
     global status_msg
     status_msg.append(status)
-
+    joined = " -> ".join(status_msg)
     if status != "end":
-        status = " -> ".join(status_msg)
-        return "[status]\n" + status + "..."
-    else: 
-        status = " -> ".join(status_msg)
-        return "[status]\n" + status
+        return "[status]\n" + joined + "..."
+    return "[status]\n" + joined
 
-response_msg = []
 
-index = 0
-def add_notification(container, message):
+def _coerce_text(message) -> str:
+    if message is None:
+        return ""
+    if isinstance(message, str):
+        return message
+    if isinstance(message, list):
+        parts = []
+        for block in message:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("text"):
+                parts.append(str(block["text"]))
+            else:
+                text = getattr(block, "text", None)
+                parts.append(str(text if text is not None else block))
+        return "\n".join(parts)
+    text = getattr(message, "content", None)
+    if text is not None and text is not message:
+        return _coerce_text(text)
+    return str(message)
+
+
+def _nq(config: RunnableConfig | dict | None):
+    """notification_queue from RunnableConfig (agent-skills style)."""
+    return _cfg(config, "notification_queue")
+
+
+def add_notification(containers_or_config, message):
+    """Show intermediate manus output via chat._notify_stream (agent-skills)."""
     global index
-    container['notification'][index].info(message)
+    text = _coerce_text(message).strip()
+    if not text:
+        return
+
+    nq = None
+    if isinstance(containers_or_config, dict):
+        nq = containers_or_config.get("notification_queue")
+        if nq is None and "configurable" in containers_or_config:
+            nq = _cfg(containers_or_config, "notification_queue")
+
+    chat._notify_stream(nq, text)
     index += 1
 
-import utils
-config = utils.load_config()
 
-s3_bucket = config["s3_bucket"] if "s3_bucket" in config else None
-if s3_bucket is None:
-    raise Exception ("No storage!")
+def _cfg(config: RunnableConfig | dict | None, key: str, default=None):
+    """Read from configurable first, then top-level (legacy)."""
+    if not config:
+        return default
+    conf = config.get("configurable") or {}
+    if key in conf:
+        return conf.get(key, default)
+    return config.get(key, default)
+
+
+def _emit_debug_status(config: RunnableConfig | dict | None, label: str) -> None:
+    """Pipeline status as Info notification (same card style as other notifies)."""
+    if chat.debug_mode != "Enable":
+        return
+    nq = _nq(config)
+    if nq is not None:
+        nq.notify(get_status_msg(label))
 
 def get_prompt_template(prompt_name: str) -> str:
     template = open(os.path.join(os.path.dirname(__file__), f"{prompt_name}.md")).read()
@@ -76,33 +136,70 @@ def get_mcp_tools(tools):
 
     return mcp_tools
 
+
+def build_markdown_viewer_html(
+    *,
+    request_id: str,
+    md_file: str,
+    title: str = "결과 리포트",
+) -> str:
+    """HTML shell that fetches a markdown artifact and renders it with marked."""
+    template_path = os.path.join(os.path.dirname(__file__), "report_md.html")
+    template = open(template_path, encoding="utf-8").read()
+    sharing_url = (chat.path or "").rstrip("/")
+    return (
+        template.replace("{request_id}", request_id)
+        .replace("{sharing_url}", sharing_url)
+        .replace("{md_file}", md_file)
+        .replace("{title}", title)
+    )
+
+
+def publish_markdown_report_html(request_id: str) -> str:
+    """Write artifacts/{id}_report.html as a markdown viewer (not pre-converted HTML)."""
+    md_file = f"{request_id}_report.md"
+    html = build_markdown_viewer_html(
+        request_id=request_id,
+        md_file=md_file,
+        title="결과 리포트",
+    )
+    html_key = f"artifacts/{request_id}_report.html"
+    chat.create_object(html_key, html)
+    url = f"{(chat.path or '').rstrip('/')}/{html_key}"
+    logger.info(f"url of html viewer: {url}")
+    return url
+
+
 async def create_final_report(request_id, question, body, urls):
-    # report.html
-    output_html = trans.trans_md_to_html(body, question)
-    chat.create_object(f"artifacts/{request_id}_report.html", output_html)
+    # Report MD "최종 결과" lists only HTML viewer + DOCX (not steps .html / PDF).
+    final_links = []
 
-    logger.info(f"url of html: {chat.path}/artifacts/{request_id}_report.html")
-    urls.append(f"{chat.path}/artifacts/{request_id}_report.html")
+    report_html_url = publish_markdown_report_html(request_id)
+    final_links.append(report_html_url)
 
-    output = await utils.generate_pdf_report(body, request_id)
-    logger.info(f"result of generate_pdf_report: {output}")
-    if output: # reports/request_id.pdf         
-        pdf_filename = f"artifacts/{request_id}.pdf"
-        with open(pdf_filename, 'rb') as f:
-            pdf_bytes = f.read()
-            chat.upload_to_s3_artifacts(pdf_bytes, f"{request_id}.pdf")
-        logger.info(f"url of pdf: {chat.path}/artifacts/{request_id}.pdf")
-        urls.append(f"{chat.path}/artifacts/{request_id}.pdf")
+    output = await utils.generate_docx_report(body, request_id)
+    logger.info(f"result of generate_docx_report: {output}")
+    docx_filename = f"artifacts/{request_id}.docx"
+    docx_url = f"{(chat.path or '').rstrip('/')}/artifacts/{request_id}.docx"
+    if output and os.path.isfile(docx_filename):
+        with open(docx_filename, "rb") as f:
+            docx_bytes = f.read()
+            chat.upload_to_s3_artifacts(docx_bytes, f"{request_id}.docx")
+        logger.info(f"url of docx: {docx_url}")
+        final_links.append(docx_url)
 
-    logger.info(f"urls: {urls}")
-    
-    # report.md
     key = f"artifacts/{request_id}_report.md"
-    time = f"# {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"    
-    final_result = body + "\n\n" + f"## 최종 결과\n\n"+'\n\n'.join(urls)
-    
-    chat.updata_object(key, time + final_result, 'prepend')
+    time = f"# {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    final_result = body + "\n\n" + f"## 최종 결과\n\n" + "\n\n".join(final_links)
+    chat.create_object(key, time + final_result)
+
+    for link in final_links:
+        if link not in urls:
+            urls.append(link)
+
+    logger.info(f"final_links: {final_links}")
     return urls
+
 
 class State(TypedDict):
     full_plan: str
@@ -111,7 +208,7 @@ class State(TypedDict):
     final_response: str
     report: str
 
-async def Coordinator(state: State, config: dict) -> dict:
+async def Coordinator(state: State, config: RunnableConfig) -> dict:
     """Coordinator node that communicate with customers."""
     logger.info(f"###### Coordinator ######")
 
@@ -119,16 +216,14 @@ async def Coordinator(state: State, config: dict) -> dict:
     logger.info(f"question: {question}")
 
     prompt_name = "coordinator"
+    containers = _cfg(config, "containers")
 
-    containers = config.get("configurable", {}).get("containers", None)
+    _emit_debug_status(config, prompt_name)
 
-    if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg(f"{prompt_name}"))
-
-    system_prompt=get_prompt_template(prompt_name)
+    system_prompt = get_prompt_template(prompt_name)
     logger.info(f"system_prompt: {system_prompt}")
-    
-    llm = chat.get_chat(extended_thinking="Disable")
+
+    llm = chat.get_chat()
     coordinator_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system_prompt),
@@ -136,22 +231,29 @@ async def Coordinator(state: State, config: dict) -> dict:
         ]
     )
 
-    chain = coordinator_prompt | llm 
+    chain = coordinator_prompt | llm
     result = chain.invoke({
         "question": question
     })
     logger.info(f"result of Coordinator: {result}")
 
     final_response = ""
-    if result.content.find('to_planner') == -1:
-        result.content = result.content.split('<next>')[0]
+    content = result.content
+    if not isinstance(content, str):
+        content = _coerce_text(content)
 
+    # User-facing text without control tags like <next>to_planner</next>
+    display_content = re.sub(r"<next>.*?</next>", "", content, flags=re.DOTALL).strip()
+
+    if content.find("to_planner") == -1:
+        content = content.split("<next>")[0].strip()
         logger.info(f"next: END")
-        final_response = result.content    
+        final_response = content
+        display_content = content
 
-    if chat.debug_mode == "Enable":
-        add_notification(containers, result.content)
-    
+    if chat.debug_mode == "Enable" and display_content:
+        add_notification(config, display_content)
+
     return {
         "final_response": final_response
     }
@@ -167,29 +269,28 @@ async def to_planner(state: State) -> str:
 
     return next
 
-async def Planner(state: State, config: dict) -> dict:
+async def Planner(state: State, config: RunnableConfig) -> dict:
     logger.info(f"###### Planner ######")
     # logger.info(f"state: {state}")
 
-    request_id = config.get("configurable", {}).get("request_id", "")
+    request_id = _cfg(config, "request_id", "")
     logger.info(f"request_id: {request_id}")
 
-    containers = config.get("configurable", {}).get("containers", None)
-    tools = config.get("configurable", {}).get("tools", None)
+    containers = _cfg(config, "containers")
+    tools = _cfg(config, "tools")
 
     mcp_tools = get_mcp_tools(tools)
     
     prompt_name = "planner"
 
-    if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg(f"{prompt_name}"))
+    _emit_debug_status(config, prompt_name)
 
     system = get_prompt_template(prompt_name)
     # logger.info(f"system_prompt of planner: {system}")
 
     human = "{input}" 
 
-    llm = chat.get_chat(extended_thinking="Disable")
+    llm = chat.get_chat()
     planner_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system),
@@ -204,8 +305,14 @@ async def Planner(state: State, config: dict) -> dict:
     })
     logger.info(f"Planner: {result.content}")
 
-    if chat.debug_mode == "Enable":
-        add_notification(containers, result.content)
+    plan_text = result.content
+    if not isinstance(plan_text, str):
+        plan_text = _coerce_text(plan_text)
+    # Hide planner control tags from the Plan card
+    plan_text = re.sub(r"<status>.*?</status>", "", plan_text, flags=re.DOTALL).strip()
+
+    if chat.debug_mode == "Enable" and plan_text:
+        chat._notify_plan(_nq(config), plan_text)
 
     # Update the plan into s3
     key = f"artifacts/{request_id}_plan.md"
@@ -230,11 +337,11 @@ async def Planner(state: State, config: dict) -> dict:
         "full_plan": result.content,
     }
 
-async def to_operator(state: State, config: dict) -> str:
+async def to_operator(state: State, config: RunnableConfig) -> str:
     logger.info(f"###### to_operator ######")
     # logger.info(f"state: {state}")
 
-    request_id = config.get("configurable", {}).get("request_id", "")
+    request_id = _cfg(config, "request_id", "")
     logger.info(f"request_id: {request_id}")
 
     if "final_response" in state and state["final_response"] != "":
@@ -242,7 +349,7 @@ async def to_operator(state: State, config: dict) -> str:
         next = "Reporter"
 
         key = f"artifacts/{request_id}.md"
-        body = f"# Final Response\n\n{state["final_response"]}\n\n"
+        body = f"# Final Response\n\n{state.get('final_response', '')}\n\n"
         chat.updata_object(key, body, 'append')
 
     else:
@@ -251,13 +358,13 @@ async def to_operator(state: State, config: dict) -> str:
 
     return next
 
-async def Operator(state: State, config: dict) -> dict:
+async def Operator(state: State, config: RunnableConfig) -> dict:
     logger.info(f"###### Operator ######")
     # logger.info(f"state: {state}")
     appendix = state["appendix"] if "appendix" in state else []
 
-    containers = config.get("configurable", {}).get("containers", None)
-    tools = config.get("configurable", {}).get("tools", None)
+    containers = _cfg(config, "containers")
+    tools = _cfg(config, "tools")
 
     mcp_tools = get_mcp_tools(tools)
     
@@ -267,11 +374,10 @@ async def Operator(state: State, config: dict) -> dict:
     full_plan = state["full_plan"]
     logger.info(f"full_plan: {full_plan}")
 
-    request_id = config.get("configurable", {}).get("request_id", "")
+    request_id = _cfg(config, "request_id", "")
     prompt_name = "operator"
 
-    if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg(f"{prompt_name}"))
+    _emit_debug_status(config, prompt_name)
 
     system = get_prompt_template(prompt_name)
     # logger.info(f"system_prompt: {system}")
@@ -290,7 +396,7 @@ async def Operator(state: State, config: dict) -> dict:
 
     logger.info(f"mcp_tools: {mcp_tools}")
 
-    llm = chat.get_chat(extended_thinking="Disable")
+    llm = chat.get_chat()
     chain = prompt | llm 
     result = chain.invoke({
         "full_plan": full_plan,
@@ -323,9 +429,6 @@ async def Operator(state: State, config: dict) -> dict:
     task = result_dict["task"]
     logger.info(f"task: {task}")
 
-    if chat.debug_mode == "Enable":
-        add_notification(containers, f"{next}: {task}")
-
     if next == "FINISHED":
         return
     else:
@@ -336,24 +439,42 @@ async def Operator(state: State, config: dict) -> dict:
                 logger.info(f"tool_info: {tool_info}")
                 
         global status_msg, response_msg
-        result, image_url, status_msg, response_msg = await agent.run_task(task, tool_info, None, containers, "Disable", status_msg, response_msg)
+        # Pass manus containers (includes notification_queue) into the nested agent.
+        result, image_url, status_msg, response_msg = await agent.run_task(
+            task,
+            tool_info,
+            None,
+            containers,
+            "Disable",
+            status_msg,
+            response_msg,
+        )
         logger.info(f"response of Operator: {result}, {image_url}")
 
+        result_text = result if isinstance(result, str) else str(result or "")
+        output_images = ""
         if image_url:
-            output_images = ""
+            global collected_image_urls
+            for url in image_url:
+                if url and url not in collected_image_urls:
+                    collected_image_urls.append(url)
             for url in image_url:
                 output_images += f"![{task}]({url})\n\n"
-            body = f"# {task}\n\n{result}\n\n{output_images}"
-            
+            appendix.append(output_images)
             logger.info(f"output_images: {output_images}")
-            appendix.append(f"{output_images}")
 
-            add_notification(containers, f"{task}\n\n{body[:500]}")
-        
-        else:
-            body = f"# {task}\n\n{result}\n\n"
+        # Persist steps with a markdown heading; UI uses Info for the task label.
+        body = f"# {task}\n\n{result_text}\n\n{output_images}"
 
-            add_notification(containers, body[:500])
+        nq = _nq(config)
+        if nq is not None:
+            nq.notify(task)
+
+        display = result_text.strip()
+        if output_images:
+            display = f"{display}\n\n{output_images}".strip()
+        if display:
+            add_notification(config, display)
 
         key = f"artifacts/{request_id}_steps.md"
         time = f"## {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -371,17 +492,16 @@ async def Operator(state: State, config: dict) -> dict:
             "appendix": appendix
         }
 
-async def Reporter(state: State, config: dict) -> dict:
+async def Reporter(state: State, config: RunnableConfig) -> dict:
     logger.info(f"###### Reporter ######")
 
     prompt_name = "reporter"
 
-    containers = config.get("configurable", {}).get("containers", None)
+    containers = _cfg(config, "containers")
 
-    if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg(f"{prompt_name}"))
+    _emit_debug_status(config, prompt_name)
 
-    request_id = config.get("configurable", {}).get("request_id", "")    
+    request_id = _cfg(config, "request_id", "")    
     
     key = f"artifacts/{request_id}_steps.md"
     context = chat.get_object(key)
@@ -391,7 +511,7 @@ async def Reporter(state: State, config: dict) -> dict:
     system_prompt=get_prompt_template(prompt_name)
     # logger.info(f"system_prompt: {system_prompt}")
     
-    llm = chat.get_chat(extended_thinking="Disable")
+    llm = chat.get_chat()
 
     human = (
         "다음의 context를 바탕으로 사용자의 질문에 대한 답변을 작성합니다.\n"
@@ -416,7 +536,7 @@ async def Reporter(state: State, config: dict) -> dict:
     logger.info(f"result of Reporter: {result}")
 
     if chat.debug_mode == "Enable":
-        add_notification(containers, result.content)
+        add_notification(config, result.content)
 
     key = f"artifacts/{request_id}_report.md"
     time = f"# {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -427,15 +547,12 @@ async def Reporter(state: State, config: dict) -> dict:
 
     chat.create_object(key, time + result.content + values)
 
-    # report.html
-    question = state["messages"][0].content
-    output_html = trans.trans_md_to_html(result.content + values, question)
-    chat.create_object(f"artifacts/{request_id}_report.html", output_html)
+    # HTML viewer loads the markdown artifact directly (no server-side md→html).
+    publish_markdown_report_html(request_id)
 
     logger.info(f"url: {chat.path}/artifacts/{request_id}_report.html")
 
-    if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg("end)"))
+    _emit_debug_status(config, "end")
 
     return {
         "report": result.content
@@ -455,116 +572,162 @@ app = ManusAgent(
 
 manus_agent = app.compile()
 
-async def run(question: str, tools: list[BaseTool], containers, request_id, report_url):
+async def run(question: str, tools: list[BaseTool], containers, request_id, report_url, notification_queue=None):
     logger.info(f"request_id: {request_id}")
     logger.info(f"report_url: {report_url}")
 
-    if chat.debug_mode == "Enable":
-        containers["status"].info(get_status_msg("start"))
-        
     inputs = {
         "messages": [HumanMessage(content=question)],
-        "final_response": ""
+        "final_response": "",
+        "appendix": [],
     }
     config = {
-        "request_id": request_id,
         "recursion_limit": 50,
-        "containers": containers,
-        "tools": tools
+        "configurable": {
+            "request_id": request_id,
+            "containers": containers,
+            "tools": tools,
+            "notification_queue": notification_queue
+            if notification_queue is not None
+            else (
+                containers.get("notification_queue")
+                if isinstance(containers, dict)
+                else None
+            ),
+        },
     }
 
-    # draw a graph
-    graph_diagram = manus_agent.get_graph().draw_mermaid_png(
-        draw_method=MermaidDrawMethod.API,
-        curve_style=CurveStyle.LINEAR
-    )    
-    random_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
-    image_filename = f'workflow_{random_id}.png'
-    url = chat.upload_to_s3(graph_diagram, image_filename)
-    logger.info(f"url: {url}")
+    if chat.debug_mode == "Enable":
+        _emit_debug_status(config, "start")
 
-    # add plan to report
-    key = f"artifacts/{request_id}_plan.md"
-    task = "실행 계획"
-    output_images = f"![{task}]({url})\n\n"
-    body = f"## {task}\n\n{output_images}"
-    chat.updata_object(key, body, 'prepend')
+    try:
+        graph_diagram = manus_agent.get_graph().draw_mermaid_png(
+            draw_method=MermaidDrawMethod.API,
+            curve_style=CurveStyle.LINEAR,
+        )
+        random_id = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=8))
+        image_filename = f"workflow_{random_id}.png"
+        url = chat.upload_to_s3(graph_diagram, image_filename)
+        logger.info(f"url: {url}")
+        if url:
+            key = f"artifacts/{request_id}_plan.md"
+            task = "실행 계획"
+            output_images = f"![{task}]({url})\n\n"
+            body = f"## {task}\n\n{output_images}"
+            chat.updata_object(key, body, "prepend")
+    except Exception as e:
+        logger.warning(f"Failed to draw/upload workflow graph: {e}")
 
     value = None
     async for output in manus_agent.astream(inputs, config):
         for key, value in output.items():
-            logger.info(f"Finished running: {key}")    
+            logger.info(f"Finished running: {key}")
     logger.info(f"value: {value}")
-    
-    if "report" in value:
+
+    if not value:
+        result = "답변을 찾지 못하였습니다."
+    elif "report" in value:
         result = value["report"]
     else:
-        result = value["final_response"]    
+        result = value.get("final_response") or ""
     logger.info(f"result: {result}")
 
-    urls = [report_url] if report_url else []    
+    urls = [report_url] if report_url else []
     urls = await create_final_report(request_id, question, result, urls)
     logger.info(f"urls: {urls}")
 
     return result, urls
 
-#########################################################
-# Manus
-#########################################################
-def get_tool_info(tools, st):    
-    toolList = []
-    for tool in tools:
-        name = tool.name
-        toolList.append(name)
-    
-    toolmsg = ', '.join(toolList)
-    st.info(f"Tools: {toolmsg}")
 
-async def run_manus(query, historyMode, st):    
-    global status_msg, response_msg
+def get_tool_info(tools, containers):
+    tool_list = [tool.name for tool in tools]
+    msg = f"Tools: {', '.join(tool_list)}"
+    if containers and containers.get("tools"):
+        containers["tools"].info(msg)
+    logger.info(msg)
+
+
+async def _load_manus_tools(mcp_servers: list, skill_list: list, user_id: str | None):
+    """Load MCP + skill tools using agent-skills style config."""
+    tools = []
+    mcp_json = mcp_config.load_selected_config(mcp_servers or [])
+    chat.mcp_json = mcp_json
+    server_params = langgraph_agent.load_multiple_mcp_server_parameters(mcp_json)
+
+    for server_name in (
+        "memory",
+        "graph memory",
+        "kb_retriever",
+        "kb-retriever",
+        "imageGeneration",
+        "image_generation",
+    ):
+        params = server_params.get(server_name)
+        if params and params.get("transport") == "stdio":
+            env = dict(params.get("env") or {})
+            env["AGENTCORE_USER_ID"] = user_id or chat.user_id
+            params["env"] = env
+
+    for server_name, params in server_params.items():
+        try:
+            client = MultiServerMCPClient({server_name: params})
+            mcp_tools = await client.get_tools()
+            for tool in mcp_tools:
+                if tool.name not in [t.name for t in tools]:
+                    tools.append(tool)
+        except Exception as e:
+            logger.error(f"Failed to load MCP server '{server_name}': {e}")
+
+    tools.extend(skill.get_skill_tools())
+    if skill_list:
+        skill.set_user_workspace(user_id)
+    logger.info(f"manus tool_list: {[t.name for t in tools]}")
+    return tools
+
+
+async def run_manus(
+    query,
+    notification_queue=None,
+    mcp_servers=None,
+    skill_list=None,
+    user_id=None,
+    historyMode="Enable",
+):
+    """Run Manus pipeline; returns (response, image_url, urls)."""
+    global status_msg, response_msg, collected_image_urls, index
     status_msg = []
     response_msg = []
+    collected_image_urls = []
+    index = 0
 
-    server_params = agent.load_multiple_mcp_server_parameters()
-    logger.info(f"server_params: {server_params}")
+    containers = make_containers(notification_queue)
+    tools = await _load_manus_tools(mcp_servers or [], skill_list or [], user_id)
 
-    client = MultiServerMCPClient(server_params)
-    tools = await client.get_tools()
-
-    tool_list = [tool.name for tool in tools]
-    logger.info(f"tool_list: {tool_list}")
-    
-    response = ""
     if chat.debug_mode == "Enable":
-        get_tool_info(tools, st)
-        logger.info(f"tools: {tools}")
+        get_tool_info(tools, containers)
 
-    # request id
-    request_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    template = open(os.path.join(os.path.dirname(__file__), f"report.html")).read()
+    request_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    template = open(os.path.join(os.path.dirname(__file__), "report.html")).read()
     template = template.replace("{request_id}", request_id)
-    template = template.replace("{sharing_url}", chat.path)
-    key = f"artifacts/{request_id}.html"
-    chat.create_object(key, template)
+    template = template.replace("{sharing_url}", chat.path or "")
+    chat.create_object(f"artifacts/{request_id}.html", template)
 
-    report_url = chat.path + "/artifacts/" + request_id + ".html"
+    report_url = f"{(chat.path or '').rstrip('/')}/artifacts/{request_id}.html"
     logger.info(f"report_url: {report_url}")
-    st.info(f"report_url: {report_url}")
+    if notification_queue is not None:
+        notification_queue.notify(f"report_url: {report_url}")
 
-    containers = {
-        "status": st.empty(),
-        "notification": [st.empty() for _ in range(100)]
-    }
-                                    
-    response, urls = await run(query, tools, containers, request_id, report_url)
+    response, urls = await run(
+        query, tools, containers, request_id, report_url, notification_queue=notification_queue
+    )
     logger.info(f"response: {response}")
 
-    if response_msg:
-        with st.expander(f"수행 결과"):
-            response_msgs = '\n\n'.join(response_msg)
-            st.markdown(response_msgs)
+    if urls:
+        url_block = "\n\n".join(urls)
+        response = (response or "") + "\n\n## 최종 결과\n\n" + url_block
+        chat._notify_stream(notification_queue, url_block)
 
-    image_url = []
+    image_url = list(collected_image_urls)
+    chat._notify_result(notification_queue, response or "")
 
     return response, image_url, urls
-

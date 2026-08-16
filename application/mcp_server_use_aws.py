@@ -35,7 +35,21 @@ except Exception as e:
         err_msg = f"Error: {str(e)}"
         logger.info(f"{err_msg}")
 
-aws_region = os.environ.get("AWS_REGION", "us-west-2")    
+def load_config():
+    config = None
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "config.json")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)    
+    return config
+
+config = load_config()
+
+aws_access_key = config.get('aws', {}).get('access_key_id')
+aws_secret_key = config.get('aws', {}).get('secret_access_key')
+aws_session_token = config.get('aws', {}).get('session_token')
+aws_region = config.get('region', 'us-west-2')
 
 MUTATIVE_OPERATIONS = [
     "create",
@@ -81,7 +95,18 @@ def get_boto3_client(
     Returns:
         A boto3 client object for the specified service
     """
-    session = boto3.Session(profile_name=profile_name)
+    if aws_access_key and aws_secret_key:
+        session = boto3.Session(
+            profile_name=profile_name,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            aws_session_token=aws_session_token
+        )
+    else:
+        session = boto3.Session(
+            profile_name=profile_name,
+            region_name=region_name
+        )
     return session.client(service_name=service_name, region_name=region_name)
 
 def handle_streaming_body(response: Dict[str, Any]) -> Dict[str, Any]:
@@ -131,7 +156,19 @@ def get_available_operations(service_name: str) -> List[str]:
 
     aws_region = os.environ.get("AWS_REGION", "us-west-2")
     try:
-        client = boto3.client(service_name, region_name=aws_region)
+        if aws_access_key and aws_secret_key:
+            client = boto3.client(
+                service_name, 
+                region_name=aws_region, 
+                aws_access_key_id=aws_access_key, 
+                aws_secret_access_key=aws_secret_key, 
+                aws_session_token=aws_session_token
+            )
+        else:
+            client = boto3.client(
+                service_name, 
+                region_name=aws_region
+            )
         return [op for op in dir(client) if not op.startswith("_")]
     except Exception as e:
         logger.error(f"Error getting operations for service {service_name}: {str(e)}")
@@ -202,14 +239,12 @@ class ToolUse(TypedDict):
     input: Any
     name: str
 
-from strands.types.tools import ToolResult, ToolUse
-
 @mcp.tool()
 def use_aws(
     service_name: str,
     operation_name: str,
     parameters: Dict[str, Any],
-    region: str = aws_region,
+    region: Optional[str] = None,
     label: str = "AWS Operation Details",
     profile_name: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -258,6 +293,9 @@ def use_aws(
         - For validation errors, the tool attempts to generate the correct input schema
         - All datetime objects are automatically converted to strings for proper JSON serialization
     """
+    if region is None:
+        region = aws_region
+
     console = aws_utils.create()
 
     # Create a panel for AWS Operation Details
@@ -338,5 +376,4 @@ def use_aws(
         }
     
 if __name__ =="__main__":
-    print(f"###### main ######")
     mcp.run(transport="stdio")    

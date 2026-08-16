@@ -1,0 +1,136 @@
+# PPT Translator glossary
+# Format:
+#   <target-language-code>:
+#     "Source Term": "Target Translation"
+#
+# When the source and target strings are identical, the term is kept as-is
+# (i.e., "do not translate").
+#
+# Override the path via CLI: `python -m ppt_translator.cli translate ... -g custom.yaml`
+# Default search order:
+#   1) ./glossary.yaml  (current working directory)
+#   2) ~/.ppt-translator/glossary.yaml
+
+ko:
+  # --- General section titles ---
+  "Key concepts": "핵심 개념"
+  "Best Practices": "모범 사례"
+  "Resources": "리소스"
+  "Demos": "데모"
+  "Pricing": "가격 책정"
+  "Overview": "개요"
+
+  # --- AWS services: keep as-is (brand names, do not translate) ---
+  "Amazon Bedrock": "Amazon Bedrock"
+  "Amazon Bedrock AgentCore": "Amazon Bedrock AgentCore"
+  "AgentCore": "AgentCore"
+  "AgentCore Runtime": "AgentCore Runtime"
+  "AgentCore Memory": "AgentCore Memory"
+  "AgentCore Identity": "AgentCore Identity"
+  "AgentCore Observability": "AgentCore Observability"
+  "AgentCore Gateway": "AgentCore Gateway"
+  "AgentCore Browser": "AgentCore Browser"
+  "AgentCore Code Interpreter": "AgentCore Code Interpreter"
+  "Amazon SageMaker": "Amazon SageMaker"
+  "SageMaker": "SageMaker"
+  "SageMaker Studio": "SageMaker Studio"
+  "SageMaker HyperPod": "SageMaker HyperPod"
+  "Amazon Q": "Amazon Q"
+  "Amazon Q Developer": "Amazon Q Developer"
+  "Amazon Q Business": "Amazon Q Business"
+  "Amazon Nova": "Amazon Nova"
+  "Amazon Titan": "Amazon Titan"
+  "Amazon EC2": "Amazon EC2"
+  "Amazon S3": "Amazon S3"
+  "Amazon EKS": "Amazon EKS"
+  "Amazon ECS": "Amazon ECS"
+  "Amazon RDS": "Amazon RDS"
+  "Amazon DynamoDB": "Amazon DynamoDB"
+  "Amazon OpenSearch": "Amazon OpenSearch"
+  "Amazon OpenSearch Serverless": "Amazon OpenSearch Serverless"
+  "Amazon Kendra": "Amazon Kendra"
+  "Amazon Comprehend": "Amazon Comprehend"
+  "Amazon Translate": "Amazon Translate"
+  "Amazon Transcribe": "Amazon Transcribe"
+  "Amazon Polly": "Amazon Polly"
+  "Amazon Rekognition": "Amazon Rekognition"
+  "Amazon Lex": "Amazon Lex"
+  "Amazon Connect": "Amazon Connect"
+  "AWS Lambda": "AWS Lambda"
+  "AWS Fargate": "AWS Fargate"
+  "AWS IAM": "AWS IAM"
+  "AWS KMS": "AWS KMS"
+  "AWS VPC": "AWS VPC"
+  "AWS CloudFormation": "AWS CloudFormation"
+  "AWS CloudTrail": "AWS CloudTrail"
+  "AWS CloudWatch": "AWS CloudWatch"
+  "AWS Step Functions": "AWS Step Functions"
+  "AWS Glue": "AWS Glue"
+
+  # --- AWS partner / non-AWS brand names ---
+  "Anthropic": "Anthropic"
+  "Claude": "Claude"
+  "Llama": "Llama"
+  "Mistral": "Mistral"
+
+  # --- ML/AI terms that have an accepted Korean translation ---
+  # Single-word terms are kept lowercase only; the LLM handles casing.
+  # Multi-word terms keep their canonical capitalization.
+  "training": "훈련"
+  "fine-tuning": "파인튜닝"
+  "pre-training": "사전 훈련"
+  "inference": "추론"
+  "model": "모델"
+  "Foundation Model": "파운데이션 모델"
+  "embedding": "임베딩"
+  "prompt": "프롬프트"
+  "token": "토큰"
+  "tokenization": "토큰화"
+  "Context Window": "컨텍스트 윈도우"
+  "Temperature": "Temperature"    # 하이퍼파라미터명은 영문 유지 권장
+  "Top-p": "Top-p"
+  "Top-k": "Top-k"
+  "guardrail": "가드레일"
+  "evaluation": "평가"
+  "latency": "레이턴시"
+  "throughput": "처리량"
+  "accuracy": "정확도"
+  "dataset": "데이터셋"
+  "distillation": "증류"
+  "quantization": "양자화"
+  "endpoint": "엔드포인트"
+  "multimodal": "멀티모달"
+  "vision": "비전"
+  "reasoning": "추론"                # 문맥상 inference와 구분 필요 — 대개 '추론'
+  "orchestration": "오케스트레이션"
+
+  # --- Retrieval / data terms ---
+  "retrieval": "검색"
+  "Retrieval-Augmented Generation": "RAG (검색 증강 생성)"
+  "vector": "벡터"
+  "Vector Database": "벡터 데이터베이스"
+  "Vector Store": "벡터 스토어"
+  "chunk": "청크 (Chunk)"
+  "chunking": "청킹"
+  "Knowledge Base": "지식 베이스 (KB)"
+  "memory": "메모리"
+  "session": "세션"
+
+  # --- Cloud / infra terms ---
+  "VPC": "VPC"
+  "IAM": "IAM"
+  "KMS": "KMS"
+  "S3": "S3"
+  "EC2": "EC2"
+  "Docker": "도커"
+  "Kubernetes": "쿠버네티스"
+  "GenAI": "GenAI"
+  "Generative AI": "생성형 AI"
+  "region": "리전"
+  "Availability Zone": "가용 영역"
+  "Account": "계정"
+
+# Add other target languages below, e.g.:
+# ja:
+#   "Training": "トレーニング"
+#   "Cloud": "クラウド"

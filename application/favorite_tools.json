@@ -1,0 +1,13 @@
+{
+  "MCP": [
+    "tavily",
+    "knowledge base",
+    "use-aws",
+    "websearch",
+    "memory"
+  ],
+  "SKILL": [
+    "skill-creator",
+    "retrieve"
+  ]
+}

@@ -1,4 +1,21 @@
+
 __pycache__
 
 # configuration
 config.json
+MEMORY.md
+memory/
+node_modules/
+package-lock.json
+*.py[cod]
+.session_storage/
+
+# local task / user session data
+data/
+
+# macOS
+.DS_Store
+
+out/
+corpus/
+artifacts/

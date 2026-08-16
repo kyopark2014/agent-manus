@@ -1,0 +1,10 @@
+{
+  "name": "account-status-skill",
+  "private": true,
+  "description": "Local dependencies for account status chart image rendering",
+  "dependencies": {
+    "chart.js": "^3.9.1",
+    "sharp": "^0.33.5",
+    "skia-canvas": "^1.0.2"
+  }
+}

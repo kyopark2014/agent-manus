@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.session_storage/
+**/node_modules/
+**/package-lock.json
+
+# local run artifacts / research dumps
+/artifacts/
+/*.csv
+application/web/dist/
+application/web/tsconfig.tsbuildinfo
+application/data/
+
+**/.env
+**/.env.*
+!.env.example

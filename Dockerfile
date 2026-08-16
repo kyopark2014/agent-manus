@@ -1,90 +1,68 @@
-FROM python:3.13-slim
+FROM --platform=linux/amd64 python:3.13-slim
 
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    unzip \
-    build-essential \
-    gcc \
-    python3-dev \
-    graphviz \
-    graphviz-dev \
-    pkg-config \
-    terminator \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get update \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install npm and Playwright
-RUN npm install -g npm@latest 
-
-# Install AWS CLI
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
-    && unzip awscliv2.zip \
-    && ./aws/install \
-    && rm -rf aws awscliv2.zip
- 
 WORKDIR /app
 
-# Install Chrome and Playwright dependencies
-RUN apt-get update && apt-get install -y \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+# Install Node.js, npm, and system dependencies
+RUN apt-get update && apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get install -y \
+        libreoffice \
+        poppler-utils \
+        pandoc \
+        tesseract-ocr \
+        fonts-nanum && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Chrome
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
+# Install MCP packages globally
+RUN npm install -g @modelcontextprotocol/server-filesystem
 
-# COPY requirements.txt .
-# RUN pip install --no-cache-dir -r requirements.txt
+# PPT npm packages (global + local so require() works from any directory, including /tmp)
+RUN npm install -g pptxgenjs sharp react react-dom react-icons docx && \
+    mkdir -p /app/node_modules && \
+    npm install --prefix /app pptxgenjs sharp react react-dom react-icons docx
 
-RUN pip install streamlit==1.41.0 streamlit-chat pandas numpy boto3
-RUN pip install langchain_aws langchain langchain_community langgraph langchain_experimental
-RUN pip install langgraph-supervisor langgraph-swarm
-RUN pip install tavily-python==0.5.0 yfinance==0.2.52 rizaio==0.8.0 pytz==2024.2 beautifulsoup4==4.12.3
-RUN pip install plotly_express==0.4.1 matplotlib==3.10.0
-RUN pip install PyPDF2==3.0.1 opensearch-py
-RUN pip install mcp langchain-mcp-adapters==0.0.9 wikipedia
-RUN pip install aioboto3 requests uv kaleido diagrams
-RUN pip install graphviz sarif-om==1.0.4
+# Allow require('pptxgenjs') to resolve from any working directory
+ENV NODE_PATH=/usr/local/lib/node_modules:/app/node_modules
 
-RUN mkdir -p /root/.streamlit
-COPY config.toml /root/.streamlit/
+# Install Google Chrome (stable)
+RUN curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends /tmp/chrome.deb && \
+    rm /tmp/chrome.deb && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install mcp-server-fetch-typescript and Playwright browsers
+RUN npx -y mcp-server-fetch-typescript --version 2>/dev/null || true && \
+    npx playwright install --with-deps chromium
+
+# Install Python packages
+RUN pip install fastapi python-multipart "uvicorn[standard]"
+RUN pip install bedrock-agentcore aws-bedrock-token-generator
+RUN pip install "boto3>=1.43.32" "botocore>=1.43.32" langchain_aws langchain langchain_community langchain-openai langchain-anthropic "openai>=2.41.0" "langgraph>=1.2.5" langgraph-checkpoint-sqlite "langgraph-supervisor>=0.0.31" "langgraph-swarm>=0.1.0" langchain-text-splitters
+RUN pip install mcp "langchain-mcp-adapters>=0.3.0" httpx aiosqlite awslabs.aws-documentation-mcp-server
+RUN pip install pandas numpy
+RUN pip install tavily-python pytz
+RUN pip install beautifulsoup4==4.12.3 plotly_express==0.4.1 matplotlib==3.10.0 
+RUN pip install opensearch-py wikipedia requests
+RUN pip install uv kaleido diagrams graphviz rich colorama finance-datareader PyPDF2 pyyaml
+RUN pip install python-telegram-bot discord.py
+RUN pip install python-pptx
+# Skills: docx / xlsx / pptx / myslide
+RUN pip install defusedxml lxml openpyxl Pillow pytesseract "markitdown[pptx]"
+# Skills: pdf
+RUN pip install reportlab pypdf pdfplumber PyYAML
+# Skills: browser automation
+RUN pip install "browser-use[cli]"
 
 COPY . .
 
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 8501
 
-RUN npm install -g playwright
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx playwright install --with-deps chromium && npx playwright install --force chrome
+HEALTHCHECK CMD curl --fail http://localhost:8501/api/health
 
-# Set environment variables for Playwright
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome
-ENV PLAYWRIGHT_CHROMIUM_ARGS="--no-sandbox"
-
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
-
-ENTRYPOINT ["python", "-m", "streamlit", "run", "application/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["uvicorn", "application.server:app", "--host", "0.0.0.0", "--port", "8501"]

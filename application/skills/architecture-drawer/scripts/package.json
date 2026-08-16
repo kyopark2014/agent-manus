@@ -1,0 +1,15 @@
+{
+  "name": "architecture-drawer-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone draw.io CLI for architecture-drawer skill (vendored drawio-jsapi from aws-samples/sample-drawio-mcp)",
+  "bin": {
+    "drawio-cli": "./drawio_cli.mjs"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.11",
+    "drawio-jsapi": "file:./vendor/drawio-jsapi",
+    "pako": "^2.1.0"
+  }
+}

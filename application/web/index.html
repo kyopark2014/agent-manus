@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Agent</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("agent-skills-theme");
+          document.documentElement.setAttribute(
+            "data-theme",
+            theme === "light" ? "light" : "dark",
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot-loading">앱을 불러오는 중...</div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

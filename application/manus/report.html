@@ -168,10 +168,10 @@
                     file_name = request_id + '_plan.md';
                 }
                 
-                let url = sharing_url + '/artifacts/' + file_name;
+                let url = sharing_url + '/artifacts/' + file_name + '?t=' + Date.now();
                 console.log("url: ", url);
 
-                const response = await fetch(url);
+                const response = await fetch(url, { cache: 'no-store' });
                 if (!response.ok) {
                     if (response.status === 404 || response.status === 403) {
                         document.getElementById('markdown-content').innerHTML = '<p>파일이 아직 준비되지 않았습니다. 잠시후 재시도 해주세요...</p>';

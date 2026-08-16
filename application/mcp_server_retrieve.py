@@ -1,0 +1,54 @@
+import logging
+import sys
+import os
+
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
+
+import mcp_retrieve
+
+from mcp.server.fastmcp import FastMCP 
+
+logging.basicConfig(
+    level=logging.INFO,  # Default to INFO level
+    format='%(filename)s:%(lineno)d | %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stderr)
+    ]
+)
+logger = logging.getLogger("retrieve-server")
+
+try:
+    mcp = FastMCP(
+        name = "mcp-retrieve",
+        instructions=(
+            "You are a helpful assistant. "
+            "You retrieve documents in RAG. "
+            "Results are scoped to the current user's uploaded documents only."
+        ),
+    )
+    logger.info("MCP server initialized successfully")
+except Exception as e:
+        err_msg = f"Error: {str(e)}"
+        logger.info(f"{err_msg}")
+
+######################################
+# RAG
+######################################
+@mcp.tool()
+def retrieve(keyword: str) -> str:
+    """
+    Query the keyword using RAG based on the knowledge base.
+    Only returns documents owned by the current user (metadata owner filter).
+    keyword: the keyword to query
+    return: the result of query
+    """
+    logger.info(f"search --> keyword: {keyword}")
+
+    return mcp_retrieve.retrieve(keyword)
+
+if __name__ =="__main__":
+    mcp.run(transport="stdio")
+
+

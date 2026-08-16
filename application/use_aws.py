@@ -1,5 +1,24 @@
+# modifed from: https://github.com/strands-agents/tools/blob/main/src/strands_tools/use_aws.py
+
 import io
 import os
+import json
+
+def load_config():
+    config = None
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "config.json")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)    
+    return config
+
+config = load_config()
+
+aws_access_key = config.get('aws', {}).get('access_key_id')
+aws_secret_key = config.get('aws', {}).get('secret_access_key')
+aws_session_token = config.get('aws', {}).get('session_token')
+bedrock_region = config.get('region', 'us-west-2')
 
 from rich.console import Console
 def create() -> Console:
@@ -18,7 +37,6 @@ def create() -> Console:
 import re
 from datetime import datetime
 from typing import Any
-
 
 def convert_datetime_to_str(obj: Any) -> Any:
     """
@@ -221,14 +239,38 @@ def to_pascal_case(service_name: str, input_str: str) -> str:
 
     try:
         # Validate using boto3
-        client = boto3.client(service_name, region_name="us-east-1")
+        if aws_access_key and aws_secret_key:
+            client = boto3.client(
+                service_name, 
+                region_name="us-west-2", 
+                aws_access_key_id=aws_access_key, 
+                aws_secret_access_key=aws_secret_key, 
+                aws_session_token=aws_session_token
+            )
+        else:
+            client = boto3.client(
+                service_name, 
+                region_name="us-west-2"
+            )
         service_model = client.meta.service_model
         service_model.operation_model(pascal_case)
         return pascal_case
     except Exception:
         try:
             # Fallback: search for matching operation name
-            client = boto3.client(service_name, region_name="us-east-1")
+            if aws_access_key and aws_secret_key:
+                client = boto3.client(
+                    service_name, 
+                    region_name="us-west-2", 
+                    aws_access_key_id=aws_access_key, 
+                    aws_secret_access_key=aws_secret_key, 
+                    aws_session_token=aws_session_token
+                )
+            else:
+                client = boto3.client(
+                    service_name, 
+                    region_name="us-west-2"
+                )
             operations = client.meta.service_model.operation_names
             snake_case = to_snake_case(input_str)
             result = next(
@@ -262,7 +304,19 @@ def check_boto3_validity(service_name: str, operation_name: str) -> Tuple[bool, 
         (False, "Unknown service: 'invalid_service'")
     """
     try:
-        client = boto3.client(service_name, region_name="us-east-1")
+        if aws_access_key and aws_secret_key:
+            client = boto3.client(
+                service_name, 
+                region_name="us-west-2", 
+                aws_access_key_id=aws_access_key, 
+                aws_secret_access_key=aws_secret_key, 
+                aws_session_token=aws_session_token
+            )
+        else:
+            client = boto3.client(
+                service_name, 
+                region_name="us-west-2"
+            )
         pascal_operation_name = to_pascal_case(service_name, operation_name)
         snake_operation_name = to_snake_case(pascal_operation_name)
 
@@ -304,7 +358,19 @@ def generate_input_schema(service_name: str, operation_name: str) -> Dict[str, A
 
     try:
         # Create a boto3 client and get the service model
-        client = boto3.client(service_name, region_name="us-east-1")
+        if aws_access_key and aws_secret_key:
+            client = boto3.client(
+                service_name, 
+                region_name="us-west-2", 
+                aws_access_key_id=aws_access_key, 
+                aws_secret_access_key=aws_secret_key, 
+                aws_session_token=aws_session_token
+            )
+        else:
+            client = boto3.client(
+                service_name, 
+                region_name="us-west-2"
+            )
         service_model = client.meta.service_model
         pascal_operation_name = to_pascal_case(service_name, operation_name)
         operation_model = service_model.operation_model(pascal_operation_name)

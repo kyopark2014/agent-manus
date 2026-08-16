@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <link rel="icon" href="data:,">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #222;
+        }
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #status {
+            color: #666;
+            font-size: 0.95rem;
+            margin-bottom: 1rem;
+        }
+        h1, h2, h3, h4 {
+            color: #2c3e50;
+            line-height: 1.35;
+        }
+        h1 {
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: 'Consolas', 'Menlo', monospace;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #333;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: 500;
+        }
+        blockquote {
+            margin: 1rem 0;
+            padding: 0.5rem 1rem;
+            border-left: 4px solid #3498db;
+            background: #f0f7ff;
+            color: #333;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+        a {
+            color: #1a73e8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="status">마크다운을 불러오는 중…</div>
+        <div id="markdown-content"></div>
+    </div>
+    <script>
+        function checkMarkedLoaded() {
+            if (typeof marked === 'undefined') {
+                console.error('marked 라이브러리가 로드되지 않았습니다.');
+                return false;
+            }
+            return true;
+        }
+
+        async function loadMarkdown() {
+            const statusEl = document.getElementById('status');
+            const contentEl = document.getElementById('markdown-content');
+
+            if (!checkMarkedLoaded()) {
+                statusEl.textContent = '';
+                contentEl.innerHTML = '<p>마크다운 변환 라이브러리를 불러오는 중 오류가 발생했습니다. 페이지를 새로고침해주세요.</p>';
+                return;
+            }
+
+            const sharingUrl = "{sharing_url}".replace(/\/$/, '');
+            const mdFile = "{md_file}";
+            // Bust CDN/browser caches so the viewer always shows the latest final report.
+            const url = sharingUrl + '/artifacts/' + mdFile + '?t=' + Date.now();
+            console.log('loading markdown:', url);
+
+            try {
+                const response = await fetch(url, { cache: 'no-store' });
+                if (!response.ok) {
+                    if (response.status === 404 || response.status === 403) {
+                        statusEl.textContent = '파일이 아직 준비되지 않았습니다. 잠시 후 새로고침해 주세요.';
+                        return;
+                    }
+                    throw new Error('HTTP ' + response.status);
+                }
+                const text = await response.text();
+                statusEl.textContent = '';
+                contentEl.innerHTML = marked.parse(text);
+                const firstHeading = contentEl.querySelector('h1, h2');
+                if (firstHeading && firstHeading.textContent) {
+                    document.title = firstHeading.textContent.trim();
+                }
+            } catch (error) {
+                console.error('마크다운 로딩 오류:', error);
+                statusEl.textContent = '';
+                contentEl.innerHTML = '<p>마크다운 파일을 불러오는 중 오류가 발생했습니다. 파일이 존재하는지 확인해주세요.</p>';
+            }
+        }
+
+        window.onload = loadMarkdown;
+    </script>
+</body>
+</html>

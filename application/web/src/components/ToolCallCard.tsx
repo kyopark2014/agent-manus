@@ -80,7 +80,7 @@ export function ToolCallCard({ event }: Props) {
   if (event.type === "tool_result") {
     const resultLabel = event.tool ? `Tool result: ${event.tool}` : "Tool result";
     return (
-      <details className="tool-card" open>
+      <details className="tool-card">
         <summary>{resultLabel}</summary>
         <pre>{formatToolPayload(event.data)}</pre>
       </details>

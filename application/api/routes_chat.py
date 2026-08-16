@@ -21,8 +21,12 @@ logger = logging.getLogger("routes_chat")
 router = APIRouter(prefix="/api/tasks", tags=["chat"])
 
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15
-# Long skill runs (docx/pptx + debug loops) routinely exceed 5 minutes.
+# Idle timeout: no agent queue output for this long → treat as stuck.
+# (Previously this was a wall-clock limit from stream start, so long Manus
+# runs hit "Agent timeout" even while tools were still progressing.)
 AGENT_STREAM_TIMEOUT_SECONDS = 1200
+# Absolute safety cap for a single chat turn (4 hours).
+AGENT_STREAM_MAX_SECONDS = 14400
 # After SSE times out / client disconnects, wait this long for the agent
 # worker to finish so the final answer can still be persisted for refresh.
 LATE_PERSIST_WAIT_SECONDS = 1800
@@ -539,13 +543,22 @@ def chat_stream(task_id: str, body: ChatRequest, request: Request):
         should_kick_graph = False
 
         try:
-            deadline = time.monotonic() + AGENT_STREAM_TIMEOUT_SECONDS
+            started_at = time.monotonic()
+            # Idle deadline resets whenever the agent emits something.
+            deadline = started_at + AGENT_STREAM_TIMEOUT_SECONDS
+            max_deadline = started_at + AGENT_STREAM_MAX_SECONDS
             while True:
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                hard_remaining = max_deadline - now
+                idle_remaining = deadline - now
+                remaining = min(hard_remaining, idle_remaining)
                 if remaining <= 0:
+                    timed_out_idle = idle_remaining <= 0
+                    elapsed = int(now - started_at)
                     logger.warning(
-                        "Agent SSE stream timed out after %ss; scheduling late persist",
-                        AGENT_STREAM_TIMEOUT_SECONDS,
+                        "Agent SSE stream timed out after %ss (%s); scheduling late persist",
+                        elapsed,
+                        "idle" if timed_out_idle else "max",
                     )
                     error_text = "Agent timeout"
                     content, events = _build_partial_error_payload(
@@ -591,6 +604,9 @@ def chat_stream(task_id: str, body: ChatRequest, request: Request):
 
                 if item is None:
                     break
+
+                # Progress received — extend idle window.
+                deadline = time.monotonic() + AGENT_STREAM_TIMEOUT_SECONDS
 
                 streamed_text, events_to_emit = _consume_queue_item(
                     item,

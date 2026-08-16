@@ -7,7 +7,6 @@
     "memory"
   ],
   "SKILL": [
-    "skill-creator",
-    "retrieve"
+    "skill-creator"
   ]
 }

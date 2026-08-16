@@ -16,7 +16,7 @@ from botocore.exceptions import ClientError
 from bedrock_agentcore.memory import MemoryClient
 
 # Configuration (must match installer.py)
-project_name = "mcp-manus"
+project_name = "agent-manus"
 region = "us-west-2"
 AGENTCORE_GATEWAY_REGION = "us-east-1"
 AGENTCORE_WEBSEARCH_GATEWAY_NAME = "gateway-websearch"

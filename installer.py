@@ -15,7 +15,7 @@ from botocore.exceptions import ClientError
 from bedrock_agentcore.memory import MemoryClient
 
 # Configuration
-project_name = "mcp-manus"  # at least 3 characters
+project_name = "agent-manus"  # at least 3 characters
 region = "us-west-2"
 AGENTCORE_GATEWAY_REGION = "us-east-1"
 AGENTCORE_WEBSEARCH_GATEWAY_NAME = "gateway-websearch"

@@ -2010,10 +2010,19 @@ def append_tool_guidance_to_prompt(system_prompt: str, mcp_servers: list) -> str
     selected = {name.lower() for name in mcp_servers}
     extras: list[str] = []
 
-    has_wiki = "wiki" in selected
-    has_tavily_or_websearch = bool(selected & {"tavily", "websearch"})
-    if has_wiki and has_tavily_or_websearch:
-        extras.append("recall_wiki와 tavily_web_search을 이용해 병렬로 조회하세요.")
+    parallel_tools: list[str] = []
+    if "wiki" in selected:
+        parallel_tools.append("recall_wiki")
+    if "tavily" in selected:
+        parallel_tools.append("tavily_web_search")
+    if "websearch" in selected:
+        parallel_tools.append("websearch")
+    if "knowledge base" in selected:
+        parallel_tools.append("retrieve")
+    if len(parallel_tools) >= 2:
+        extras.append(
+            f"검색이 필요한 경우에 {', '.join(parallel_tools)}을 이용해 병렬로 조회하세요."
+        )
 
     if "aws documentation" in selected:
         extras.append(

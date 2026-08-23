@@ -17,6 +17,27 @@ _MAX_FILE_BYTES = 500_000
 _MAX_SOURCES = 6
 _MAX_EXCERPT_CHARS = 1800
 _MAX_TOTAL_EXCERPT_CHARS = 8000
+_MAX_LABELS_FOR_EXCERPT = 3
+_QUERY_TERM_WEIGHT = 10
+_LABEL_TERM_WEIGHT = 1
+_PAGE_HEADING_RE = re.compile(r"^## Page (\d+)\s*$", re.MULTILINE)
+_PAGE_LOC_RE = re.compile(
+    r"(?:pages?|p\.?)\s*(\d+)(?:\s*[-–—]\s*(\d+))?",
+    re.IGNORECASE,
+)
+# Minimal bilingual aliases so English queries hit Korean converted pages.
+_TERM_ALIASES: dict[str, list[str]] = {
+    "biden": ["바이든"],
+    "trump": ["트럼프"],
+    "comparison": ["비교"],
+    "tariff": ["관세"],
+    "deficit": ["적자", "무역적자"],
+    "바이든": ["biden"],
+    "트럼프": ["trump"],
+    "비교": ["comparison"],
+    "관세": ["tariff"],
+    "무역적자": ["deficit", "trade deficit"],
+}
 
 
 # Prefer these for excerpts / body search (never dump PDF binary into the UI).
@@ -115,6 +136,21 @@ def _query_terms(question: str) -> list[str]:
                 continue
             seen.add(t)
             out.append(t)
+    return _expand_query_terms(out)
+
+
+def _expand_query_terms(terms: list[str]) -> list[str]:
+    """Attach a few EN↔KO aliases without dropping the original tokens."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        candidates = [term, *(_TERM_ALIASES.get(term.lower(), []))]
+        for cand in candidates:
+            key = cand.lower()
+            if not cand or key in seen:
+                continue
+            seen.add(key)
+            out.append(cand)
     return out
 
 
@@ -314,19 +350,171 @@ def _converted_markdown_for(
                     found.append(p)
     return found
 
+
 def _decode_text(raw: bytes) -> str:
     if len(raw) > _MAX_FILE_BYTES:
         raw = raw[:_MAX_FILE_BYTES]
     return raw.decode("utf-8", errors="replace")
 
 
+def _parse_pages_from_location(loc: str | None) -> set[int]:
+    """Parse page numbers from ``source_location`` values like ``Page 9`` / ``Page 9-11``."""
+    if not loc:
+        return set()
+    pages: set[int] = set()
+    for match in _PAGE_LOC_RE.finditer(str(loc)):
+        start = int(match.group(1))
+        end = int(match.group(2) or match.group(1))
+        lo, hi = (start, end) if start <= end else (end, start)
+        pages.update(range(lo, hi + 1))
+    return pages
+
+
+def _pages_in_markdown(text: str) -> set[int]:
+    return {int(m.group(1)) for m in _PAGE_HEADING_RE.finditer(text or "")}
+
+
+def _page_sections(text: str) -> list[tuple[int, str]]:
+    """Return ``(page_num, section_markdown)`` for each ``## Page N`` block."""
+    if not text:
+        return []
+    parts = _PAGE_HEADING_RE.split(text)
+    sections: list[tuple[int, str]] = []
+    i = 1
+    while i + 1 < len(parts):
+        try:
+            page_num = int(parts[i])
+        except ValueError:
+            i += 2
+            continue
+        body = (parts[i + 1] or "").strip()
+        section = f"## Page {page_num}\n\n{body}" if body else f"## Page {page_num}"
+        sections.append((page_num, section))
+        i += 2
+    return sections
+
+
+def _extract_page_sections(text: str, pages: set[int]) -> str | None:
+    """Keep only ``## Page N`` sections whose N is in *pages*."""
+    if not text or not pages:
+        return None
+    sections = [
+        section for page_num, section in _page_sections(text) if page_num in pages
+    ]
+    return "\n\n".join(sections) if sections else None
+
+
+def _pages_matching_terms(text: str, terms: list[str]) -> dict[int, int]:
+    """Map page number → count of distinct query terms hit in that section."""
+    if not text or not terms:
+        return {}
+    lowered = [t.lower() for t in terms if t]
+    scores: dict[int, int] = {}
+    for page_num, section in _page_sections(text):
+        low = section.lower()
+        score = sum(1 for t in lowered if t in low)
+        if score > 0:
+            scores[page_num] = score
+    return scores
+
+
+def _best_term_pages(scores: dict[int, int]) -> set[int]:
+    """Keep pages with the strongest query-term overlap (ties included)."""
+    if not scores:
+        return set()
+    best = max(scores.values())
+    # If the best page only matches one broad term, still return those pages;
+    # multi-term queries naturally prefer the denser page (e.g. 바이든+무역적자).
+    return {page for page, score in scores.items() if score == best}
+
+
+def _load_converted_chunks(
+    converted: list[Path],
+    *,
+    pages: set[int] | None = None,
+    terms: list[str] | None = None,
+) -> list[tuple[Path, str]]:
+    """Read converted markdown, scoped to location pages and/or query-term pages."""
+    if not converted:
+        return []
+
+    term_list = [t for t in (terms or []) if t]
+    path_texts: list[tuple[Path, str]] = []
+    term_scores: dict[int, int] = {}
+    for path in converted:
+        try:
+            text = _decode_text(path.read_bytes())
+        except OSError:
+            continue
+        path_texts.append((path, text))
+        if term_list:
+            for page_num, score in _pages_matching_terms(text, term_list).items():
+                term_scores[page_num] = max(term_scores.get(page_num, 0), score)
+
+    include_pages: set[int] = set(pages or ())
+    best_term_pages = _best_term_pages(term_scores)
+    if best_term_pages:
+        # Prefer pages that both match the query densely and/or the node location.
+        if include_pages:
+            overlap = include_pages & best_term_pages
+            include_pages = overlap or (include_pages | best_term_pages)
+        else:
+            include_pages = best_term_pages
+
+    if include_pages:
+        chunks: list[tuple[Path, str]] = []
+        for path, text in path_texts:
+            sliced = _extract_page_sections(text, include_pages)
+            if sliced:
+                chunks.append((path, sliced))
+        if chunks:
+            return chunks
+
+    # No page headings / no page hits — return full converted parts (legacy).
+    return path_texts
+
+
+def _pick_display_path(
+    chunks: list[tuple[Path, str]],
+    pages: set[int] | None,
+    terms: list[str] | None = None,
+) -> Path:
+    """Choose the converted path that best represents the returned text."""
+    if not chunks:
+        raise ValueError("chunks must be non-empty")
+    if len(chunks) == 1:
+        return chunks[0][0]
+
+    def _term_density(item: tuple[Path, str]) -> tuple[int, int]:
+        text = item[1]
+        if not terms:
+            return (0, len(_pages_in_markdown(text)))
+        scores = _pages_matching_terms(text, terms)
+        return (sum(scores.values()), len(scores))
+
+    if terms:
+        return max(chunks, key=_term_density)[0]
+    if pages:
+        return max(
+            chunks,
+            key=lambda item: len(_pages_in_markdown(item[1]) & pages),
+        )[0]
+    return max(chunks, key=lambda item: len(_pages_in_markdown(item[1])))[0]
+
+
 def _read_readable_source(
-    src: Path, roots: list[Path]
+    src: Path,
+    roots: list[Path],
+    *,
+    pages: set[int] | None = None,
+    terms: list[str] | None = None,
 ) -> tuple[Path | None, str, str | None]:
     """Load excerptable text for ``src``.
 
     Graph nodes often point at the original PDF (provenance). For reading we
     prefer Sync's converted markdown under ``graphify-out/converted/``.
+    When *pages* / query *terms* are set, only matching ``## Page N`` sections
+    are used so citations point at the relevant ``*_partNN.md``.
     Returns ``(path_used, text, error)``.
     """
     allowed = _allowed_source(src, roots)
@@ -337,57 +525,64 @@ def _read_readable_source(
     )
     converted = _converted_markdown_for(src, roots)
 
+    def _from_converted() -> tuple[Path | None, str, str | None] | None:
+        if not converted:
+            return None
+        chunks = _load_converted_chunks(
+            converted, pages=pages, terms=terms
+        )
+        if not chunks:
+            return None
+        display_pages = set(pages or ())
+        if terms:
+            term_scores: dict[int, int] = {}
+            for _, text in chunks:
+                for page_num, score in _pages_matching_terms(text, terms).items():
+                    term_scores[page_num] = max(term_scores.get(page_num, 0), score)
+            display_pages |= _best_term_pages(term_scores)
+        path_used = _pick_display_path(
+            chunks, display_pages or None, terms=terms
+        )
+        return path_used, "\n\n".join(text for _, text in chunks), None
+
     if need_converted and converted:
-        chunks: list[str] = []
-        for p in converted:
-            try:
-                chunks.append(_decode_text(p.read_bytes()))
-            except OSError:
-                continue
-        if chunks:
-            return converted[0], "\n\n".join(chunks), None
+        loaded = _from_converted()
+        if loaded is not None:
+            return loaded
 
     if allowed is None:
-        if converted:
-            chunks = []
-            for p in converted:
-                try:
-                    chunks.append(_decode_text(p.read_bytes()))
-                except OSError:
-                    continue
-            if chunks:
-                return converted[0], "\n\n".join(chunks), None
+        loaded = _from_converted()
+        if loaded is not None:
+            return loaded
         return None, "", "source file not readable or outside allowed roots"
 
     try:
         raw = allowed.read_bytes()
     except OSError as exc:
-        if converted:
-            chunks = []
-            for p in converted:
-                try:
-                    chunks.append(_decode_text(p.read_bytes()))
-                except OSError:
-                    continue
-            if chunks:
-                return converted[0], "\n\n".join(chunks), None
+        loaded = _from_converted()
+        if loaded is not None:
+            return loaded
         return None, "", str(exc)
 
     # Known text extensions (.md, .txt, …) are always decoded — do not let the
     # binary heuristic discard corpus markdown with heavy CJK UTF-8.
     if suffix in _TEXT_SUFFIXES:
-        return allowed, _decode_text(raw), None
+        text = _decode_text(raw)
+        include_pages = set(pages or ())
+        if terms:
+            include_pages |= _best_term_pages(
+                _pages_matching_terms(text, terms)
+            )
+        if include_pages:
+            sliced = _extract_page_sections(text, include_pages)
+            if sliced:
+                return allowed, sliced, None
+        return allowed, text, None
 
     if _looks_binary(raw) or suffix in _BINARY_SUFFIXES:
-        if converted:
-            chunks = []
-            for p in converted:
-                try:
-                    chunks.append(_decode_text(p.read_bytes()))
-                except OSError:
-                    continue
-            if chunks:
-                return converted[0], "\n\n".join(chunks), None
+        loaded = _from_converted()
+        if loaded is not None:
+            return loaded
         return (
             allowed,
             "",
@@ -395,7 +590,6 @@ def _read_readable_source(
         )
 
     return allowed, _decode_text(raw), None
-
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -415,6 +609,20 @@ def _paragraphs(text: str) -> list[str]:
     return [joined[i : i + 600] for i in range(0, min(len(joined), 3000), 500)]
 
 
+def _label_terms(labels: list[str], *, limit: int = _MAX_LABELS_FOR_EXCERPT) -> list[str]:
+    """Tokenize a small set of node labels for weak excerpt scoring."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for lab in labels[: max(0, limit)]:
+        for token in re.split(r"[\s/()\[\]|,:-]+", str(lab)):
+            tok = token.lower().strip()
+            if len(tok) <= 2 or tok in seen:
+                continue
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
 def _extract_excerpts(
     text: str,
     *,
@@ -422,36 +630,43 @@ def _extract_excerpts(
     labels: list[str],
     source_location: str | None,
 ) -> list[str]:
+    """Rank paragraphs with query terms weighted far above label tokens."""
     paras = _paragraphs(text)
     if not paras:
         return []
 
-    loc = (source_location or "").strip()
-    if loc and loc.lower() not in ("none", "null"):
-        loc_hits = [p for p in paras if loc.lower() in p.lower()]
-        if loc_hits:
-            paras = loc_hits + [p for p in paras if p not in loc_hits]
+    query_terms = [t.lower() for t in terms if t]
+    label_terms = _label_terms(labels)
+    pages = _parse_pages_from_location(source_location)
 
-    label_terms = []
-    for lab in labels:
-        for token in re.split(r"[\s/()\[\]|,:-]+", lab):
-            tok = token.lower().strip()
-            if len(tok) > 2:
-                label_terms.append(tok)
-    score_terms = list(dict.fromkeys(terms + label_terms))
+    ranked: list[tuple[int, int, str]] = []
+    for para in paras:
+        low = para.lower()
+        q_hits = sum(1 for t in query_terms if t in low)
+        l_hits = sum(1 for t in label_terms if t in low)
+        if q_hits == 0 and l_hits == 0:
+            continue
+        # Query matches dominate; label-only hits stay weak so BFS neighbor
+        # labels cannot drown page-local evidence.
+        score = q_hits * _QUERY_TERM_WEIGHT + l_hits * _LABEL_TERM_WEIGHT
+        if pages:
+            covered = _pages_in_markdown(para)
+            if covered & pages:
+                score += 5
+            elif any(f"page {n}" in low for n in pages):
+                score += 3
+        ranked.append((score, q_hits, para))
 
-    ranked: list[tuple[int, str]] = []
-    for p in paras:
-        low = p.lower()
-        score = sum(1 for t in score_terms if t in low)
-        if score > 0:
-            ranked.append((score, p))
-    ranked.sort(key=lambda x: (-x[0], -len(x[1])))
+    ranked.sort(key=lambda item: (-item[0], -item[1], -len(item[2])))
+    preferred = [item for item in ranked if item[1] > 0] if query_terms else ranked
+    pool = preferred if preferred else ranked
 
     excerpts: list[str] = []
     used = 0
-    for _, p in ranked[:4]:
-        snippet = p if len(p) <= _MAX_EXCERPT_CHARS else p[: _MAX_EXCERPT_CHARS - 1] + "…"
+    for _, _, para in pool[:4]:
+        snippet = (
+            para if len(para) <= _MAX_EXCERPT_CHARS else para[: _MAX_EXCERPT_CHARS - 1] + "…"
+        )
         if used + len(snippet) > _MAX_EXCERPT_CHARS:
             remain = _MAX_EXCERPT_CHARS - used
             if remain < 80:
@@ -676,7 +891,19 @@ def query_user_graph(
     ):
         if len(sources_out) >= _MAX_SOURCES or total_chars >= _MAX_TOTAL_EXCERPT_CHARS:
             break
-        readable_path, text, err = _read_readable_source(Path(src), roots)
+        pages: set[int] = set()
+        # Only top-relevance nodes drive page scoping — BFS neighbors from
+        # other pages must not re-open the whole PDF into excerpt ranking.
+        for n in file_nodes[:5]:
+            pages |= _parse_pages_from_location(
+                str(n.get("source_location") or "")
+            )
+        readable_path, text, err = _read_readable_source(
+            Path(src),
+            roots,
+            pages=pages or None,
+            terms=terms,
+        )
         display_name = Path(src).name
         if readable_path is None or not text:
             sources_out.append(
@@ -699,10 +926,18 @@ def query_user_graph(
             ),
             None,
         )
+        # Prefer the highest-relevance location that contributed page numbers.
+        if pages:
+            for n in file_nodes:
+                cand = str(n.get("source_location") or "")
+                if _parse_pages_from_location(cand) & pages:
+                    loc = cand
+                    break
+        top_labels = [str(n["label"]) for n in file_nodes[:_MAX_LABELS_FOR_EXCERPT]]
         excerpts = _extract_excerpts(
             text,
             terms=terms,
-            labels=[str(n["label"]) for n in file_nodes],
+            labels=top_labels,
             source_location=loc,
         )
         # Trim to remaining budget

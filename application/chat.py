@@ -1052,6 +1052,45 @@ def get_summary(docs):
     
     return summary
 
+
+def _content_to_text(content: object) -> str:
+    """Normalize LangChain/Bedrock message content to a plain string.
+
+    Newer Claude/Bedrock multimodal responses often return ``content`` as a list
+    of blocks (e.g. ``[{"type": "text", "text": "..."}]``).
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(str(text))
+            else:
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
+def _parse_result_tag(text: str) -> str:
+    """Extract inner text from <result>...</result> when present."""
+    if not text:
+        return text
+    start = text.find("<result>")
+    end = text.find("</result>")
+    if start != -1 and end != -1 and end > start:
+        return text[start + 8 : end]
+    return text
+
+
 def summary_image(img_base64, instruction):      
     llm = get_chat()
 
@@ -1078,12 +1117,13 @@ def summary_image(img_base64, instruction):
         )
     ]
     
+    extracted_text = \"\"
     for attempt in range(5):
         logger.info(f"attempt: {attempt}")
         try: 
             result = llm.invoke(messages)
             
-            extracted_text = result.content
+            extracted_text = _content_to_text(result.content)
             # print('summary from an image: ', extracted_text)
             break
         except Exception:
@@ -1119,7 +1159,7 @@ def extract_text(img_base64):
         try: 
             result = multimodal.invoke(messages)
             
-            extracted_text = result.content
+            extracted_text = _content_to_text(result.content)
             # print('result of text extraction from an image: ', extracted_text)
             break
         except Exception:
@@ -1311,8 +1351,10 @@ def summarize_image(image_content: bytes, prompt: str) -> str:
 
     logger.info("이미지의 내용을 분석합니다.")
     result = summary_image(img_base64, prompt)
+    if not isinstance(result, str):
+        result = _content_to_text(result)
 
-    summary = result[result.find("<result>") + 8 : result.find("</result>")]
+    summary = _parse_result_tag(result)
     logger.info(f"image summary: {summary}")
 
     return summary

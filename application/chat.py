@@ -1117,7 +1117,7 @@ def summary_image(img_base64, instruction):
         )
     ]
     
-    extracted_text = \"\"
+    extracted_text = ""
     for attempt in range(5):
         logger.info(f"attempt: {attempt}")
         try: 

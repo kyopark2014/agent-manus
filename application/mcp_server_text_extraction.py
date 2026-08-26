@@ -170,7 +170,7 @@ def _content_to_text(content: object) -> str:
 
 def _extract_text_with_llm(img_base64: str, prompt: Optional[str] = None) -> str:
     """Extract text from image using LLM."""
-    query = prompt or "텍스트를 추출해서 markdown 포맷으로 변환하세요. <result> tag를 붙여주세요."
+    query = prompt or "텍스트를 추출해서 markdown 포맷으로 변환하세요. 원문의 언어를 그대로 유지하고 번역하지 마세요. <result> tag를 붙여주세요."
 
     multimodal = _get_chat()
     messages = [

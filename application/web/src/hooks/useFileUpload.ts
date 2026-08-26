@@ -146,7 +146,12 @@ export function useFileUpload({ disabled = false }: UseFileUploadOptions = {}) {
         onComplete?.(result.message);
       } catch (err) {
         console.error("Document upload failed", err);
-        setUploadError("파일 업로드에 실패했습니다. 다시 시도해 주세요.");
+        const detail = err instanceof Error ? err.message : "";
+        setUploadError(
+          detail
+            ? detail.replace(/^RAG upload failed:\s*/i, "")
+            : "파일 업로드에 실패했습니다. 다시 시도해 주세요.",
+        );
       } finally {
         setUploading(false);
       }

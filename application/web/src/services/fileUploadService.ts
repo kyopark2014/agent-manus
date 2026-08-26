@@ -1,9 +1,15 @@
 import { api } from "../api";
 
-/** Normalize any thrown value into an Error with a safe, user-facing message. */
+/** Normalize any thrown value into an Error with a useful user-facing message. */
 function toUploadError(context: string, cause: unknown): Error {
-  // Never forward raw exception text (stack fragments, SDK internals) to the UI.
-  const error = new Error(context);
+  let detail = "";
+  if (cause instanceof Error && cause.message.trim()) {
+    detail = cause.message.trim();
+  } else if (typeof cause === "string" && cause.trim()) {
+    detail = cause.trim();
+  }
+  const message = detail && detail !== context ? `${context}: ${detail}` : context;
+  const error = new Error(message);
   if (cause instanceof Error) {
     (error as Error & { cause?: unknown }).cause = cause;
   }
@@ -20,9 +26,13 @@ export const fileUploadService = {
     }
   },
 
-  async uploadToRag(file: File): Promise<{ message: string }> {
+  async uploadToRag(
+    file: File,
+    options?: { sync?: boolean },
+  ): Promise<{ message: string; file_name: string }> {
     try {
-      return await api.uploadToRag(file);
+      const result = await api.uploadToRag(file, options);
+      return { message: result.message, file_name: result.file_name };
     } catch (cause) {
       throw toUploadError("RAG upload failed", cause);
     }

@@ -13,6 +13,17 @@ export interface RagUploadResult {
   };
 }
 
+export interface RagUploadPresignResult {
+  ok: boolean;
+  file_name: string;
+  s3_key: string;
+  content_type?: string;
+  upload_url: string;
+  headers: Record<string, string>;
+  expires_in?: number;
+  url?: string | null;
+}
+
 export interface FileUploadResult {
   ok: boolean;
   file_name: string;
@@ -152,30 +163,84 @@ export const api = {
     request<{ ok: boolean }>(`/api/tasks/${id}`, { method: "DELETE" }),
   getMessages: (id: string) =>
     request<{ messages: Message[] }>(`/api/tasks/${id}/messages`),
-  uploadToRag: async (file: File): Promise<RagUploadResult> => {
-    uiLog("rag:upload start", { name: file.name, size: file.size });
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/rag/upload", {
+  uploadToRag: async (
+    file: File,
+    options?: { sync?: boolean },
+  ): Promise<RagUploadResult> => {
+    // Presigned PUT: browser → S3 directly (avoids ECS/ALB ~80MB body limits).
+    const sync = options?.sync !== false;
+    uiLog("rag:upload start", { name: file.name, size: file.size, sync });
+
+    const presign = await request<RagUploadPresignResult>("/api/rag/upload/presign", {
       method: "POST",
-      credentials: "include",
-      body: form,
+      body: JSON.stringify({
+        file_name: file.name,
+        size: file.size,
+        content_type: file.type || undefined,
+      }),
     });
-    if (!res.ok) {
-      const text = await res.text();
-      uiError("rag:upload failed", { status: res.status, body: text });
-      let message = text || res.statusText;
-      try {
-        const parsed = JSON.parse(text) as { detail?: string };
-        if (typeof parsed.detail === "string" && parsed.detail) {
-          message = parsed.detail;
-        }
-      } catch {
-        // keep raw text
-      }
-      throw new Error(message);
+    if (!presign.upload_url || !presign.s3_key) {
+      throw new Error("Presign succeeded but no upload URL was returned");
     }
-    const data = (await res.json()) as RagUploadResult;
+
+    uiLog("rag:upload put start", {
+      name: presign.file_name,
+      s3_key: presign.s3_key,
+      size: file.size,
+      host: (() => {
+        try {
+          return new URL(presign.upload_url).host;
+        } catch {
+          return "";
+        }
+      })(),
+    });
+
+    const putHeaders = new Headers(presign.headers || {});
+    if (!putHeaders.has("Content-Type")) {
+      putHeaders.set(
+        "Content-Type",
+        presign.content_type || "application/octet-stream",
+      );
+    }
+    let putRes: Response;
+    try {
+      putRes = await fetch(presign.upload_url, {
+        method: "PUT",
+        body: file,
+        headers: putHeaders,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      uiError("rag:upload put network error", { detail });
+      throw new Error(`S3 직접 업로드 네트워크 오류: ${detail}`);
+    }
+    if (!putRes.ok) {
+      const text = await putRes.text();
+      uiError("rag:upload put failed", { status: putRes.status, body: text });
+      const codeMatch = text.match(/<Code>([^<]+)<\/Code>/i);
+      const msgMatch = text.match(/<Message>([^<]+)<\/Message>/i);
+      const s3Detail =
+        codeMatch || msgMatch
+          ? [codeMatch?.[1], msgMatch?.[1]].filter(Boolean).join(": ")
+          : "";
+      throw new Error(
+        s3Detail ||
+          text.slice(0, 200) ||
+          putRes.statusText ||
+          `Direct S3 upload failed (HTTP ${putRes.status})`,
+      );
+    }
+
+    const data = await request<RagUploadResult>("/api/rag/upload/complete", {
+      method: "POST",
+      body: JSON.stringify({
+        file_name: presign.file_name,
+        s3_key: presign.s3_key,
+        size: file.size,
+        sync,
+      }),
+    });
     uiLog("rag:upload complete", data);
     return data;
   },

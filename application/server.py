@@ -15,6 +15,7 @@ from application.api.routes_files import router as files_router
 from application.api.routes_rag import router as rag_router
 from application.api.routes_admin import router as admin_router
 from application.api.routes_graph import router as graph_router
+from application.security_headers import SecurityHeadersMiddleware
 from application.task_store import init_db
 from application.task_store_persistence import (
     flush_persist,
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent UI", version="1.0.0", lifespan=lifespan)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(auth_router)
 app.include_router(config_router)

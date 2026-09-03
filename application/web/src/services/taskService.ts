@@ -10,6 +10,15 @@ export function sortTasks(tasks: Task[]): Task[] {
   });
 }
 
+/** Most recently updated task, ignoring pin order (for entry / delete fallback). */
+export function mostRecentlyUpdatedTask(tasks: Task[]): Task | null {
+  if (tasks.length === 0) return null;
+  return [...tasks].sort(
+    (a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  )[0];
+}
+
 export function titleFromPrompt(prompt: string): string {
   return prompt.trim().slice(0, MAX_TASK_TITLE_LENGTH) || "New task";
 }

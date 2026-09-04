@@ -3,7 +3,7 @@ import sys
 import mcp_coder as coder
 
 from typing import Dict, Optional, Any
-from mcp.server.fastmcp import FastMCP 
+from mcp.server.mcpserver import MCPServer 
 
 logging.basicConfig(
     level=logging.INFO,  # Default to INFO level
@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("aws-coder")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name = "tools",
         instructions=(
             "You are a helpful assistant. "

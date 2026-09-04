@@ -4,7 +4,7 @@ import mcp_basic
 import subprocess
 import json
 
-from mcp.server.fastmcp import FastMCP 
+from mcp.server.mcpserver import MCPServer 
 from typing import List, Optional
 
 logging.basicConfig(
@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger("aws-cli")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name = "tools",
         instructions=(
             "You are a helpful assistant. "

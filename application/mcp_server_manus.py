@@ -3,7 +3,7 @@ import sys
 import mcp_manus as manus
 
 from typing import Dict, Optional, Any
-from mcp.server.fastmcp import FastMCP 
+from mcp.server.mcpserver import MCPServer 
 
 logging.basicConfig(
     level=logging.INFO,  # Default to INFO level
@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("manus")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name = "rag",
         instructions=(
             "You are a helpful assistant. "

@@ -9,7 +9,7 @@ if _script_dir not in sys.path:
 import mcp_graph_memory
 
 from typing import Dict, Literal, Optional
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger("graph-memory")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name="graph memory",
         instructions=(
             "Search the user's Knowledge Graph (past conversation history) "

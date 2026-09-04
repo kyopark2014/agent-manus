@@ -34,7 +34,7 @@ from botocore.exceptions import ClientError
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AIMessageChunk
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.mcp import MCPAdapter
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -2122,9 +2122,9 @@ async def create_agent(
 
     for server_name, params in server_params.items():
         try:
-            client = MultiServerMCPClient({server_name: params})
-            logger.info(f"MCP client initialized for server: {server_name}")
-            mcp_tools = await client.get_tools()
+            async with MCPAdapter({"mcpServers": {server_name: params}}) as adapter:
+                logger.info(f"MCP client initialized for server: {server_name}")
+                mcp_tools = await adapter.list_tools()
             for tool in mcp_tools:
                 logger.info(f"mcp_tool: {tool.name} (from {server_name})")
                 if tool.name not in [t.name for t in tools]:

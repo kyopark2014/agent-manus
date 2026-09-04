@@ -63,9 +63,9 @@ def reporter(user_request: str):
 #     server_params = mcp_client.load_multiple_mcp_server_parameters(mcp_json)
 #     logger.info(f"server_params: {server_params}")
 
-#     from langchain_mcp_adapters.client import MultiServerMCPClient
-#     async with MultiServerMCPClient(server_params) as client:
-#         tools = client.get_tools()
+#     from langchain.mcp import MCPAdapter
+#     async with MCPAdapter({"mcpServers": server_params}) as adapter:
+#         tools = await adapter.list_tools()
 #         logger.info(f"tools: {tools}")
 
 #         return tools

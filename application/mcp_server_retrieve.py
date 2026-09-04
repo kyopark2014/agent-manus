@@ -8,7 +8,7 @@ if _script_dir not in sys.path:
 
 import mcp_retrieve
 
-from mcp.server.fastmcp import FastMCP 
+from mcp.server.mcpserver import MCPServer 
 
 logging.basicConfig(
     level=logging.INFO,  # Default to INFO level
@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger("retrieve-server")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name = "mcp-retrieve",
         instructions=(
             "You are a helpful assistant. "

@@ -2,7 +2,7 @@ import logging
 import sys
 import mcp_basic
 
-from mcp.server.fastmcp import FastMCP 
+from mcp.server.mcpserver import MCPServer 
 
 logging.basicConfig(
     level=logging.INFO,  # Default to INFO level
@@ -14,7 +14,7 @@ logging.basicConfig(
 logger = logging.getLogger("aws-server-basic")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name = "tools",
         instructions=(
             "You are a helpful assistant. "

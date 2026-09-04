@@ -1136,8 +1136,10 @@ def _s3_client_for_presign():
     """S3 client for browser-safe regional, virtual-hosted presigned URLs.
 
     Global ``*.s3.amazonaws.com`` hosts often 307-redirect to the region
-    endpoint; browsers then fail the signed PUT (403/CORS). Prefer virtual-hosted
-    ``https://{bucket}.s3.{region}.amazonaws.com/...``.
+    endpoint; browsers then fail the signed PUT (403/CORS) and our API never
+    sees ``/complete``. Prefer virtual-hosted
+    ``https://{bucket}.s3.{region}.amazonaws.com/...`` via SigV4 + regional
+    endpoint so the browser PUT never follows a TemporaryRedirect.
     """
     from botocore.config import Config
 
@@ -1145,6 +1147,7 @@ def _s3_client_for_presign():
     return boto3.client(
         service_name="s3",
         region_name=region,
+        endpoint_url=f"https://s3.{region}.amazonaws.com",
         config=Config(
             signature_version="s3v4",
             s3={"addressing_style": "virtual"},

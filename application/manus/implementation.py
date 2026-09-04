@@ -12,7 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.mcp import MCPAdapter
 from langgraph.constants import END
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated, TypedDict
@@ -670,8 +670,8 @@ async def _load_manus_tools(mcp_servers: list, skill_list: list, user_id: str | 
 
     for server_name, params in server_params.items():
         try:
-            client = MultiServerMCPClient({server_name: params})
-            mcp_tools = await client.get_tools()
+            async with MCPAdapter({"mcpServers": {server_name: params}}) as adapter:
+                mcp_tools = await adapter.list_tools()
             for tool in mcp_tools:
                 if tool.name not in [t.name for t in tools]:
                     tools.append(tool)

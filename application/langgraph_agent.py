@@ -691,16 +691,16 @@ def _supports_prompt_caching(model_type: str | None) -> bool:
 
 
 def _system_message_with_cache(system: str) -> SystemMessage:
-    """Build a SystemMessage with an Anthropic-style cache breakpoint."""
-    return SystemMessage(
-        content=[
-            {
-                "type": "text",
-                "text": system,
-                "cache_control": dict(PROMPT_CACHE_CONTROL),  # same ttl as last-message breakpoint
-            }
-        ]
-    )
+    """Build a SystemMessage for Bedrock prompt caching.
+
+    Do **not** embed ``cache_control`` on the system content block.
+
+    ``ChatBedrock`` strips system ``cache_control`` ttl to the ``5m``
+    default, which clashes with ``model.bind(cache_control=… ttl=1h)``
+    on the last message and raises ``ValidationException``. Let bind
+    alone own the 1h breakpoint(s).
+    """
+    return SystemMessage(content=system)
 
 
 def _log_prompt_cache_usage(response: AIMessage) -> None:

@@ -27,6 +27,7 @@ _MODEL_ALIASES: dict[str, str] = {
     "Claude 4.6 Sonnet": "claude-sonnet-4-6",
     "Claude 4.5 Sonnet": "claude-sonnet-4-5",
     "Claude Fable 5": "claude-fable-5",
+    "Claude Fable 5.1": "claude-fable-5-1",
     "Claude 4.8 Opus": "claude-opus-4-8",
     "Claude 4.7 Opus": "claude-opus-4-7",
     "Claude 4.6 Opus": "claude-opus-4-6",

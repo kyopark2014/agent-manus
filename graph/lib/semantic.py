@@ -257,6 +257,16 @@ def extract_from_queue(
         existing = _load_existing_extract(artifact_dir)
         if existing is not None and (existing.get("nodes") or existing.get("edges")):
             print("Extract queue empty — reusing existing .graphify_extract.json")
+            from lib.build_graph import (
+                prune_extraction_to_existing_sources,
+                sanitize_extraction,
+            )
+
+            existing = sanitize_extraction(existing)
+            existing = prune_extraction_to_existing_sources(
+                existing, corpus_dir=corpus_dir
+            )
+            _write_extract(artifact_dir, existing)
             return existing
         print("Extract queue empty — falling back to full corpus extract")
         return extract_corpus(

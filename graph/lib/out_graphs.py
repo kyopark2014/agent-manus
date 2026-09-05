@@ -82,6 +82,20 @@ def write_user_graph(
     html_path = out_dir / "graph.html"
     json_path = out_dir / "graph.json"
 
+    # Drop nodes whose corpus source no longer exists (stale graph.json).
+    corpus_dir = out_dir.parent / "corpus"
+    missing = [
+        nid
+        for nid, data in H.nodes(data=True)
+        if (src := (data.get("source_file") or "").strip())
+        and not Path(src).is_file()
+        and not (corpus_dir / Path(src).name).is_file()
+    ]
+    if missing:
+        H = H.copy()
+        H.remove_nodes_from(missing)
+        print(f"[graph] publish pruned {len(missing)} nodes with missing sources")
+
     if H.number_of_nodes() == 0:
         return {}
 

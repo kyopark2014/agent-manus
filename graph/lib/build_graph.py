@@ -7,6 +7,97 @@ from pathlib import Path
 from typing import Any
 
 
+def sanitize_extraction(extraction: dict[str, Any]) -> dict[str, Any]:
+    """Drop/repair malformed edges so graphify ``build_from_json`` does not crash.
+
+    LLM chunks occasionally emit an edge with ``id`` instead of ``source`` (or
+    omit endpoints entirely). Treat ``id`` as ``source`` when present; otherwise
+    skip the edge.
+    """
+    raw_edges = extraction.get("edges") or []
+    cleaned: list[dict[str, Any]] = []
+    fixed = 0
+    dropped = 0
+    for edge in raw_edges:
+        if not isinstance(edge, dict):
+            dropped += 1
+            continue
+        item = dict(edge)
+        if not item.get("source") and item.get("id"):
+            item["source"] = item.pop("id")
+            fixed += 1
+        if item.get("source") and item.get("target"):
+            cleaned.append(item)
+        else:
+            dropped += 1
+    if fixed or dropped:
+        print(
+            f"[graph] sanitized edges: fixed={fixed} dropped={dropped} "
+            f"kept={len(cleaned)}/{len(raw_edges)}"
+        )
+    out = dict(extraction)
+    out["edges"] = cleaned
+    return out
+
+
+def prune_extraction_to_existing_sources(
+    extraction: dict[str, Any],
+    *,
+    corpus_dir: Path | None = None,
+    valid_names: set[str] | None = None,
+) -> dict[str, Any]:
+    """Drop nodes/edges whose ``source_file`` is missing from disk (or name set).
+
+    Prevents stale extract/graph from pointing at deleted corpus turns — the UI
+    error ``source file not readable or outside allowed roots``.
+    """
+    names = set(valid_names or ())
+    resolved_ok: set[str] = set()
+    if corpus_dir is not None:
+        root = Path(corpus_dir).expanduser().resolve()
+        if root.is_dir():
+            for p in root.rglob("*.md"):
+                if not p.is_file() or p.name == ".gitkeep":
+                    continue
+                try:
+                    resolved_ok.add(str(p.resolve()))
+                    names.add(p.name)
+                except OSError:
+                    continue
+
+    def _ok(src: Any) -> bool:
+        if not src:
+            return True
+        try:
+            path = Path(str(src))
+            if names and path.name in names:
+                return True
+            if resolved_ok and str(path.expanduser().resolve()) in resolved_ok:
+                return True
+            if path.is_file():
+                return True
+        except OSError:
+            return False
+        return False
+
+    nodes = [n for n in (extraction.get("nodes") or []) if _ok(n.get("source_file"))]
+    edges = [e for e in (extraction.get("edges") or []) if _ok(e.get("source_file"))]
+    hyper = [
+        h for h in (extraction.get("hyperedges") or []) if _ok(h.get("source_file"))
+    ]
+    dropped_nodes = len(extraction.get("nodes") or []) - len(nodes)
+    if dropped_nodes:
+        print(
+            f"[graph] pruned missing sources: nodes -{dropped_nodes} "
+            f"→ {len(nodes)}; edges → {len(edges)}"
+        )
+    out = dict(extraction)
+    out["nodes"] = nodes
+    out["edges"] = edges
+    out["hyperedges"] = hyper
+    return out
+
+
 def build_and_export(
     extraction: dict[str, Any],
     artifact_dir: Path,
@@ -26,6 +117,30 @@ def build_and_export(
 
     out = artifact_dir.resolve()
     out.mkdir(parents=True, exist_ok=True)
+
+    corpus_dir: Path | None = None
+    label_path = Path(corpus_label).expanduser()
+    if label_path.is_dir():
+        corpus_dir = label_path
+    else:
+        # Session layout: …/graph/out → sibling corpus/
+        sibling = out.parent / "corpus"
+        if sibling.is_dir():
+            corpus_dir = sibling
+
+    extraction = sanitize_extraction(extraction)
+    extraction = prune_extraction_to_existing_sources(
+        extraction, corpus_dir=corpus_dir
+    )
+    # Persist repaired extract so incremental --from-queue reuse stays valid.
+    extract_path = out / ".graphify_extract.json"
+    try:
+        extract_path.write_text(
+            json.dumps(extraction, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
     G = build_from_json(extraction)
     if G.number_of_nodes() == 0:

@@ -102,6 +102,7 @@ export interface StreamEvent {
   images?: string[];
   tool_events?: ToolEvent[];
   tool?: string;
+  mcpServer?: string;
   input?: unknown;
   toolUseId?: string;
 }

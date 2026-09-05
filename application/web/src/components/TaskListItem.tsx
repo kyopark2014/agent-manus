@@ -22,8 +22,10 @@ export function TaskListItem({
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [renameValue, setRenameValue] = useState(task.title);
   const menuRef = useRef<HTMLDivElement>(null);
+  const deleteWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setRenameValue(task.title);
@@ -40,12 +42,37 @@ export function TaskListItem({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!confirmDelete) return;
+    function onDocClick(e: MouseEvent) {
+      if (deleteWrapRef.current && !deleteWrapRef.current.contains(e.target as Node)) {
+        setConfirmDelete(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [confirmDelete]);
+
+  useEffect(() => {
+    if (!confirmDelete) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setConfirmDelete(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmDelete]);
+
   function submitRename() {
     const title = renameValue.trim();
     if (title && title !== task.title) {
       onRename(title);
     }
     setRenaming(false);
+  }
+
+  function handleDelete() {
+    setConfirmDelete(false);
+    onDelete();
   }
 
   if (renaming) {
@@ -83,22 +110,45 @@ export function TaskListItem({
         <span className="task-item-label">{task.title}</span>
       </button>
       <div className="task-actions">
-        <button
-          type="button"
-          className="task-action-btn"
-          aria-label="Delete task"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M5 2V1h6v1h4v2H1V2h4ZM3 6h1v8H2V6h1Zm3 0h1v8H6V6Zm4 0h1v8h-1V6ZM3 16h10V6H3v10Z"
-            />
-          </svg>
-        </button>
+        <div className="task-delete-wrap" ref={deleteWrapRef}>
+          <button
+            type="button"
+            className="task-action-btn"
+            aria-label="Delete task"
+            aria-expanded={confirmDelete}
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmDelete((open) => !open);
+            }}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M5 2V1h6v1h4v2H1V2h4ZM3 6h1v8H2V6h1Zm3 0h1v8H6V6Zm4 0h1v8h-1V6ZM3 16h10V6H3v10Z"
+              />
+            </svg>
+          </button>
+          {confirmDelete && (
+            <div className="task-delete-popover" role="dialog" aria-label="Delete task">
+              <div className="task-delete-popover-actions">
+                <button
+                  type="button"
+                  className="task-delete-cancel"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  className="task-delete-confirm-btn"
+                  onClick={handleDelete}
+                >
+                  삭제
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="task-menu-wrap" ref={menuRef}>
           <button
             type="button"

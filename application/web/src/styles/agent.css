@@ -522,6 +522,71 @@ select {
   color: var(--text-primary);
 }
 
+/* Cancel/Delete popover sits on the delete button (right-aligned, content width). */
+.task-delete-popover {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+}
+
+.task-delete-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-delete-cancel {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.task-delete-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.task-delete-confirm-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #f87171;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.task-delete-confirm-btn:hover {
+  background: #ef4444;
+}
+
+
+.task-delete-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+}
+
 .task-menu-wrap {
   position: relative;
 }

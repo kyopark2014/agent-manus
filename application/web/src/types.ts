@@ -106,3 +106,21 @@ export interface StreamEvent {
   input?: unknown;
   toolUseId?: string;
 }
+
+export type TaskRunStatus =
+  | "idle"
+  | "running"
+  | "pending"
+  | "done"
+  | "error"
+  | "missing";
+
+export interface TaskRun {
+  task_id: string;
+  status: TaskRunStatus;
+  content: string;
+  images: string[];
+  error?: string | null;
+  source?: "messages" | "registry" | "checkpoint" | null;
+  hydrated: boolean;
+}

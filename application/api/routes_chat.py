@@ -13,6 +13,7 @@ from application.api.routes_auth import _kick_graph_job, require_user_id
 from application import task_store
 from application.task_store_persistence import flush_persist
 from application import chat
+from application import run_registry
 from application.notification_queue import QueueNotificationSink
 from application.runtime_mode import run_agent
 
@@ -420,6 +421,12 @@ def _spawn_late_persist(
                 logger.info("Late persist skipped: empty final payload")
                 return
 
+            # Another path (SSE finally / hydrate) may have already written.
+            existing = task_store.list_messages(task_id, user_id)
+            if existing and existing[-1].get("role") == "assistant":
+                logger.info("Late persist skipped: assistant already persisted")
+                return
+
             logger.info(
                 "Late persist saving assistant message (%s chars, %s events)",
                 len(final_content),
@@ -445,8 +452,60 @@ def _spawn_late_persist(
     ).start()
 
 
+def _messages_need_assistant(task_id: str, user_id: str) -> bool:
+    messages = task_store.list_messages(task_id, user_id)
+    return not messages or messages[-1].get("role") != "assistant"
+
+
+def _persist_assistant_now(
+    *,
+    task_id: str,
+    user_id: str,
+    result_holder: dict[str, Any],
+    tool_events: list[dict[str, Any]],
+    streamed_text: str,
+) -> bool:
+    """Write assistant message if DB still ends on user. Returns True if written."""
+    if not _messages_need_assistant(task_id, user_id):
+        return False
+    if "error" in result_holder and not (result_holder.get("content") or "").strip():
+        error_text = f"Error: {result_holder['error']}"
+        content, events = _build_partial_error_payload(
+            tool_events=tool_events,
+            streamed_text=streamed_text,
+            error_text=error_text,
+        )
+        task_store.add_message(
+            task_id,
+            "assistant",
+            content,
+            user_id=user_id,
+            tool_events=events,
+        )
+        flush_persist(user_id)
+        return True
+    final_content, images, events = _build_final_payload(
+        result_holder=result_holder,
+        tool_events=tool_events,
+        streamed_text=streamed_text,
+    )
+    if not (final_content or events):
+        return False
+    task_store.add_message(
+        task_id,
+        "assistant",
+        final_content,
+        user_id=user_id,
+        images=images,
+        tool_events=events,
+    )
+    flush_persist(user_id)
+    return True
+
+
 def _run_agent_thread(
     *,
+    task_id: str,
     prompt: str,
     user_id: str,
     mcp_servers: list[str],
@@ -461,6 +520,7 @@ def _run_agent_thread(
     result_holder: dict[str, Any],
 ) -> None:
     sink = QueueNotificationSink(message_queue)
+    run_registry.mark_running(task_id, user_id)
 
     try:
         logger.info("Using local LangGraph agent (chat → langgraph_agent)")
@@ -481,9 +541,15 @@ def _run_agent_thread(
             response = json.dumps(response, ensure_ascii=False)
         result_holder["content"] = response
         result_holder["images"] = image_url or []
+        run_registry.mark_done(
+            task_id,
+            content=response,
+            images=image_url or [],
+        )
     except Exception as exc:
         logger.exception("Agent run failed")
         result_holder["error"] = str(exc)
+        run_registry.mark_done(task_id, error=str(exc))
     finally:
         message_queue.put(None)
 
@@ -517,6 +583,7 @@ def chat_stream(task_id: str, body: ChatRequest, request: Request):
     worker = threading.Thread(
         target=_run_agent_thread,
         kwargs={
+            "task_id": task_id,
             "prompt": prompt,
             "user_id": user_id,
             "mcp_servers": task["mcp_servers"],
@@ -667,22 +734,40 @@ def chat_stream(task_id: str, body: ChatRequest, request: Request):
                 }
             )
         except GeneratorExit:
-            already_final = bool((result_holder.get("content") or "").strip()) or (
-                "error" in result_holder
-            )
-            if not sse_closed_early and not already_final:
-                logger.warning(
-                    "SSE client disconnected before agent finished; scheduling late persist"
-                )
-                _spawn_late_persist(
-                    task_id=task_id,
-                    user_id=user_id,
-                    message_queue=message_queue,
-                    result_holder=result_holder,
-                    tool_events=tool_events,
-                    tool_meta=tool_meta,
-                    streamed_text=streamed_text,
-                )
+            # Always persist if DB still ends on user — including the race where
+            # the worker finished (already_final) but add_message never ran.
+            if not sse_closed_early and _messages_need_assistant(task_id, user_id):
+                already_final = bool(
+                    (result_holder.get("content") or "").strip()
+                ) or ("error" in result_holder)
+                if already_final:
+                    logger.warning(
+                        "SSE client disconnected after agent finished; "
+                        "persisting assistant immediately"
+                    )
+                    wrote = _persist_assistant_now(
+                        task_id=task_id,
+                        user_id=user_id,
+                        result_holder=result_holder,
+                        tool_events=tool_events,
+                        streamed_text=streamed_text,
+                    )
+                    if wrote:
+                        should_kick_graph = True
+                else:
+                    logger.warning(
+                        "SSE client disconnected before agent finished; "
+                        "scheduling late persist"
+                    )
+                    _spawn_late_persist(
+                        task_id=task_id,
+                        user_id=user_id,
+                        message_queue=message_queue,
+                        result_holder=result_holder,
+                        tool_events=tool_events,
+                        tool_meta=tool_meta,
+                        streamed_text=streamed_text,
+                    )
             raise
         finally:
             if not sse_closed_early:

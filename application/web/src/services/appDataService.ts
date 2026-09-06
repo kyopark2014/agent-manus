@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { AppConfig, Message, Task } from "../types";
+import type { AppConfig, Message, Task, TaskRun } from "../types";
 
 export type CreateTaskDefaults = {
   model_name?: string;
@@ -91,6 +91,14 @@ export const appDataService = {
       return messages;
     } catch (error) {
       throw sanitizeError(error, "Failed to load messages.");
+    }
+  },
+
+  async getTaskRun(taskId: string): Promise<TaskRun> {
+    try {
+      return await api.getTaskRun(taskId);
+    } catch (error) {
+      throw sanitizeError(error, "Failed to load task run status.");
     }
   },
 

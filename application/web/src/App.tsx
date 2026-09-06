@@ -41,6 +41,10 @@ const TASK_ERROR_MESSAGE = "Task operation failed. Please try again.";
 const CHAT_ERROR_MESSAGE = "Failed to send message. Please try again.";
 const LOAD_MESSAGES_ERROR_MESSAGE =
   "Failed to load messages. Please try again.";
+/** Poll interval while waiting for a background agent after refresh. */
+const RUN_RECOVERY_POLL_MS = 2500;
+/** Stop polling after this many attempts (~50 min at 2.5s). */
+const RUN_RECOVERY_MAX_ATTEMPTS = 1200;
 
 export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
@@ -61,6 +65,8 @@ export default function App() {
   const [queuePausedByTaskId, setQueuePausedByTaskId] = useState<
     Record<string, boolean>
   >({});
+  /** True while polling /run after refresh when messages end on user. */
+  const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const { getStreamForTask, sendMessage, stopMessage } = useChatStream();
   const emptyTaskBootstrapRef = useRef<Promise<Task> | null>(null);
   const tasksBootstrappedForUserRef = useRef<string | null>(null);
@@ -74,6 +80,14 @@ export default function App() {
 
   const activeTask = tasks.find((t) => t.id === activeTaskId) ?? null;
   const activeStream = getStreamForTask(activeTaskId);
+  const lastMessageRole = messages[messages.length - 1]?.role;
+  const needsRecovery =
+    Boolean(activeTaskId) &&
+    !activeStream.streaming &&
+    lastMessageRole === "user";
+  const isRecovering =
+    Boolean(activeTaskId) && recoveringTaskId === activeTaskId;
+  const showWaiting = activeStream.streaming || isRecovering;
   const activeQueuedMessages = activeTaskId
     ? (queuedByTaskId[activeTaskId] ?? [])
     : [];
@@ -98,6 +112,7 @@ export default function App() {
       roles: rows.map((m) => m.role),
     });
     setMessages((prev) => stabilizeMessageKeys(prev, rows));
+    return rows;
   }, []);
 
   const refreshTasks = useCallback(async () => {
@@ -111,6 +126,78 @@ export default function App() {
     setConfig(latest);
     return latest;
   }, []);
+
+  /** After refresh: if last message is user, poll /run until assistant arrives. */
+  useEffect(() => {
+    if (!activeTaskId) {
+      setRecoveringTaskId(null);
+      return;
+    }
+    if (!needsRecovery) {
+      setRecoveringTaskId((prev) => (prev === activeTaskId ? null : prev));
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const taskId = activeTaskId;
+
+    setRecoveringTaskId(taskId);
+    uiLog("run:recovery start", { taskId });
+
+    async function poll() {
+      if (cancelled || activeTaskIdRef.current !== taskId) return;
+      attempts += 1;
+      try {
+        const run = await appDataService.getTaskRun(taskId);
+        if (cancelled || activeTaskIdRef.current !== taskId) return;
+
+        if (
+          run.status === "done" ||
+          run.status === "error" ||
+          run.status === "idle" ||
+          run.hydrated
+        ) {
+          uiLog("run:recovery complete", {
+            taskId,
+            status: run.status,
+            source: run.source,
+            hydrated: run.hydrated,
+          });
+          await loadMessages(taskId);
+          if (!cancelled && activeTaskIdRef.current === taskId) {
+            setRecoveringTaskId((prev) => (prev === taskId ? null : prev));
+          }
+          return;
+        }
+
+        // running / pending — keep waiting
+        if (attempts >= RUN_RECOVERY_MAX_ATTEMPTS) {
+          uiLog("run:recovery timeout", { taskId, attempts });
+          setRecoveringTaskId((prev) => (prev === taskId ? null : prev));
+          return;
+        }
+      } catch (err) {
+        uiError("run:recovery poll failed", err);
+        if (attempts >= 5) {
+          setRecoveringTaskId((prev) => (prev === taskId ? null : prev));
+          return;
+        }
+      }
+
+      timer = setTimeout(poll, RUN_RECOVERY_POLL_MS);
+    }
+
+    // Delay first poll so an in-flight sendMessage can mark streaming
+    // before we treat a freshly appended user bubble as abandoned.
+    timer = setTimeout(poll, RUN_RECOVERY_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeTaskId, needsRecovery, loadMessages]);
 
   useEffect(() => {
     (async () => {
@@ -659,7 +746,7 @@ export default function App() {
         ) : (
           <ChatThread
             messages={messages}
-            streaming={activeStream.streaming}
+            streaming={showWaiting}
             streamText={activeStream.streamText}
             streamEvents={activeStream.streamEvents}
             taskTitle={activeTask?.title ?? "New task"}
@@ -667,7 +754,7 @@ export default function App() {
             footer={
               <ChatInput
                 disabled={!activeTask}
-                waiting={activeStream.streaming}
+                waiting={showWaiting}
                 queuedMessages={activeQueuedMessages}
                 queuePaused={activeQueuePaused}
                 onRemoveQueued={handleRemoveQueued}

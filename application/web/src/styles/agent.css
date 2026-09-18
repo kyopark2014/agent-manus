@@ -35,19 +35,20 @@
 
 [data-theme="light"] {
   color-scheme: light;
-  --bg-primary: #f7f7f8;
-  --bg-secondary: #ffffff;
+  /* Chat is the brightest surface; task sidebar sits slightly behind it. */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7f7f9;
   --bg-tertiary: #ececf1;
   --bg-hover: #e8e8ed;
-  --border: #e5e5e5;
+  --border: #e2e2e8;
   --text-primary: #0d0d0d;
   --text-secondary: #5f5f5f;
   --text-muted: #8e8e8e;
   --accent: #0d8c6d;
   --accent-hover: #0a7359;
-  --user-bubble: #e8e8ed;
-  --sidebar-top: #fafafa;
-  --sidebar-bottom: #f0f0f2;
+  --user-bubble: #ececf1;
+  --sidebar-top: #f3f3f6;
+  --sidebar-bottom: #ebebef;
   --menu-hover-start: rgba(0, 0, 0, 0.06);
   --menu-hover-mid: rgba(0, 0, 0, 0.04);
   --menu-hover-end: rgba(0, 0, 0, 0.015);
@@ -62,6 +63,44 @@
   --auth-card-inset: rgba(255, 255, 255, 0.8);
   --auth-backdrop-secondary: rgba(16, 163, 127, 0.08);
 }
+
+[data-theme="light"] .sidebar {
+  /* Let the sidebar gradient show through so the edge blends into chat. */
+  border-right-color: transparent;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+  background: transparent;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.is-active {
+  background: transparent;
+}
+
+.app-shell.is-resizing-sidebar,
+body.is-resizing-sidebar {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.is-resizing-sidebar iframe {
+  pointer-events: none;
+}
+
+
+[data-theme="light"] .main-panel {
+  background: #ffffff;
+}
+
 
 * {
   box-sizing: border-box;
@@ -94,6 +133,9 @@ select {
 .sidebar {
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
+  max-width: var(--sidebar-width);
+  flex-shrink: 0;
+  position: relative;
   background: linear-gradient(
     180deg,
     var(--sidebar-top) 0%,
@@ -2143,11 +2185,16 @@ button.config-popover-choice.is-selected {
     z-index: 100;
     width: min(300px, 88vw);
     min-width: unset;
+    max-width: unset;
     transform: translateX(-105%);
     transition: transform 0.22s ease;
     box-shadow: none;
     padding-top: max(12px, env(safe-area-inset-top));
     padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .sidebar-resizer {
+    display: none;
   }
 
   .sidebar.sidebar-panel-open {

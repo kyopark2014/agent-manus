@@ -22,6 +22,7 @@ from lib.config import (
 # Friendly / UI names → LiteLLM gateway model ids (same as application map).
 # Unknown ids are passed through unchanged so any LiteLLM model works.
 _MODEL_ALIASES: dict[str, str] = {
+    "Claude 5.5 Opus": "claude-opus-5-5",
     "Claude 5.0 Sonnet": "claude-sonnet-5",
     "Claude 5.0 Opus": "claude-opus-5",
     "Claude 4.6 Sonnet": "claude-sonnet-4-6",
@@ -38,6 +39,8 @@ _MODEL_ALIASES: dict[str, str] = {
     "OpenAI GPT 5.5": "gpt-5.5",
     "OpenAI GPT 5.4": "gpt-5.4",
     "OpenAI GPT 6 Astra": "gpt-6-astra",
+    "OpenAI GPT 6 Sol": "gpt-6-sol",
+    "OpenAI GPT 6 Luna": "gpt-6-luna",
     "OpenAI GPT 5.6 Sol": "gpt-5.6-sol",
     "OpenAI GPT 5.6 Terra": "gpt-5.6-terra",
     "OpenAI GPT 5.6 Luna": "gpt-5.6-luna",

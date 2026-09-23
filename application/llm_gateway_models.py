@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # UI display name → LiteLLM model_name (litellm-guide/install/models.py + gateway /v1/models)
 LLM_GATEWAY_MODEL_MAP: dict[str, str] = {
+    "Claude 5.5 Opus": "claude-opus-5-5",
     "Claude 5.0 Sonnet": "claude-sonnet-5",
     "Claude 5.0 Opus": "claude-opus-5",
     "Claude 4.6 Sonnet": "claude-sonnet-4-6",
@@ -18,6 +19,8 @@ LLM_GATEWAY_MODEL_MAP: dict[str, str] = {
     "OpenAI GPT 5.5": "gpt-5.5",
     "OpenAI GPT 5.4": "gpt-5.4",
     "OpenAI GPT 6 Astra": "gpt-6-astra",
+    "OpenAI GPT 6 Sol": "gpt-6-sol",
+    "OpenAI GPT 6 Luna": "gpt-6-luna",
     "OpenAI GPT 5.6 Sol": "gpt-5.6-sol",
     "OpenAI GPT 5.6 Terra": "gpt-5.6-terra",
     "OpenAI GPT 5.6 Luna": "gpt-5.6-luna",

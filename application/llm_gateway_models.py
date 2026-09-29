@@ -5,6 +5,7 @@ from __future__ import annotations
 # UI display name → LiteLLM model_name (litellm-guide/install/models.py + gateway /v1/models)
 LLM_GATEWAY_MODEL_MAP: dict[str, str] = {
     "Claude 5.5 Opus": "claude-opus-5-5",
+    "Claude 5.5 Sonnet": "claude-sonnet-5-5",
     "Claude 5.0 Sonnet": "claude-sonnet-5",
     "Claude 5.0 Opus": "claude-opus-5",
     "Claude 4.6 Sonnet": "claude-sonnet-4-6",

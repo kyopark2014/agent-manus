@@ -120,6 +120,13 @@ JSON_HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+# Weather Nuri sky icons (CSS class on span.wic → PNG).
+# Hourly/current codes are DB* → DY@64. Daily forecast codes are NB* → NY@64.
+# DB00/NB00 have no image. Chat renders markdown images only, so size is the
+# 64×64 file itself (HTML width/height is shown as raw text).
+ICON_BASE = f"{BASE_URL}/w/resources/icon"
+NO_ICON_CODES = {"DB00", "NB00"}
+
 
 def fetch_page(url: str, params: dict | None = None, headers: dict | None = None) -> str | None:
     """Fetch page HTML/text."""
@@ -387,6 +394,48 @@ def resolve_auto_location() -> tuple[dict | None, str]:
     return None, ASK_USER_FOR_LOCATION
 
 
+def weather_icon_code(el) -> str | None:
+    """Read the KMA icon code from a span.wic element (e.g. DB01, NB03)."""
+    if el is None:
+        return None
+    for cls in el.get("class") or []:
+        if cls in ("wic", "large", "sm"):
+            continue
+        if re.fullmatch(r"(?:DB|NB)[A-Za-z0-9_-]+", cls) and cls not in NO_ICON_CODES:
+            return cls
+    return None
+
+
+def weather_icon_url(code: str | None) -> str | None:
+    """Public Weather Nuri PNG for a sky-condition code."""
+    if not code or code in NO_ICON_CODES:
+        return None
+    if code.startswith("NB"):
+        folder = "NY@64/Light"
+    elif code.startswith("DB"):
+        folder = "DY@64/Light"
+    else:
+        return None
+    return f"{ICON_BASE}/{folder}/{code}.png"
+
+
+def weather_icon_md(code: str | None, alt: str) -> str | None:
+    """Markdown image. HTML img tags are shown as text in this chat."""
+    url = weather_icon_url(code)
+    if not url:
+        return None
+    label = re.sub(r"[\[\]]", "", (alt or "날씨").strip()) or "날씨"
+    return f"![{label}]({url})"
+
+
+def _sky_with_icon(sky: str | None, code: str | None) -> str:
+    text = sky or "-"
+    md = weather_icon_md(code, text if text != "-" else "날씨")
+    if md and text != "-":
+        return f"{md} {text}"
+    return text
+
+
 def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", " ", text)
 
@@ -413,6 +462,9 @@ def parse_current_weather(html: str) -> dict:
     # Weather condition is often in the icon title attribute
     wic = soup.select_one(".wic[title], span.wic")
     if wic:
+        code = weather_icon_code(wic)
+        if code:
+            result["아이콘"] = code
         sky = (wic.get("title") or wic.get_text(strip=True) or "").strip()
         sky = re.sub(r"^(현재\s*)?날씨\s*", "", sky)
         if sky and "기온" not in sky:
@@ -530,12 +582,15 @@ def parse_digital_forecast(html: str) -> dict:
             if m_max:
                 max_temp = m_max.group(1)
         am_sky = pm_sky = None
+        am_code = pm_code = None
         am_el = slide.select_one(".daily-weather-am .wic")
         pm_el = slide.select_one(".daily-weather-pm .wic")
         if am_el:
+            am_code = weather_icon_code(am_el)
             am_sky = am_el.get("title") or am_el.get_text(strip=True)
             am_sky = re.sub(r"^오전 날씨\s*", "", am_sky)
         if pm_el:
+            pm_code = weather_icon_code(pm_el)
             pm_sky = pm_el.get("title") or pm_el.get_text(strip=True)
             pm_sky = re.sub(r"^오후 날씨\s*", "", pm_sky)
         am_pop = pm_pop = None
@@ -553,6 +608,8 @@ def parse_digital_forecast(html: str) -> dict:
             "최고기온": max_temp,
             "오전날씨": am_sky,
             "오후날씨": pm_sky,
+            "오전아이콘": am_code,
+            "오후아이콘": pm_code,
             "오전강수확률": am_pop,
             "오후강수확률": pm_pop,
         })
@@ -581,7 +638,9 @@ def parse_digital_forecast(html: str) -> dict:
 
         sky_el = item.select_one(".wic")
         sky = None
+        icon = None
         if sky_el:
+            icon = weather_icon_code(sky_el)
             sky = sky_el.get("title") or sky_el.get_text(strip=True)
 
         pop = _li_field(item, "강수확률")
@@ -597,6 +656,7 @@ def parse_digital_forecast(html: str) -> dict:
             "기온": temp,
             "체감온도": feels,
             "날씨": sky,
+            "아이콘": icon,
             "강수량": pcp,
             "강수강도": intensity,
             "강수확률": pop,
@@ -874,6 +934,22 @@ def build_weather_narrative(
     return "\n\n".join(paras)
 
 
+def _day_icon_bits(prefix: str, day: dict) -> list[str]:
+    """Markdown snippets: official icon + label for a day's AM/PM sky."""
+    bits: list[str] = []
+    for when, code_key, sky_key in (
+        ("오전", "오전아이콘", "오전날씨"),
+        ("오후", "오후아이콘", "오후날씨"),
+    ):
+        sky = day.get(sky_key) or ""
+        md = weather_icon_md(day.get(code_key), sky or f"{prefix} {when}")
+        if not md:
+            continue
+        label = f"{prefix} {when}"
+        bits.append(f"{md} {label} {sky}".strip())
+    return bits
+
+
 def format_weather_response(
     loc: dict,
     current: dict,
@@ -885,11 +961,30 @@ def format_weather_response(
     """Format prose summary plus compact tables."""
     display = loc.get("name") or loc.get("address") or "조회지역"
     narrative = build_weather_narrative(loc, current, forecast, air, regional)
+    daily = (forecast or {}).get("daily") or []
 
     lines = [f"## {display} 날씨", ""]
     if resolve_note:
         lines.append(f"위치 확인: {resolve_note}")
         lines.append("")
+    icon_blocks: list[str] = []
+    current_md = weather_icon_md(current.get("아이콘"), current.get("날씨") or "현재 날씨")
+    if current_md:
+        sky = current.get("날씨") or ""
+        icon_blocks.append(f"{current_md} 현재 {sky}".strip())
+    if daily:
+        icon_blocks.extend(_day_icon_bits("오늘", daily[0]))
+    if len(daily) > 1:
+        icon_blocks.extend(_day_icon_bits("내일", daily[1]))
+    if icon_blocks:
+        lines.append("### 날씨 아이콘")
+        lines.append("")
+        lines.append("기상청 날씨누리에서 가져온 날씨 아이콘입니다.")
+        lines.append("")
+        for block in icon_blocks:
+            lines.append(block)
+            lines.append("")
+
     lines.append("### 한눈에 보기")
     lines.append("")
     lines.append(narrative)
@@ -898,7 +993,6 @@ def format_weather_response(
         lines.append("")
         lines.append(f"광역예보 발표: {regional['발표시각']}")
 
-    daily = (forecast or {}).get("daily") or []
     if daily:
         lines.append("")
         lines.append("### 일별 예보 요약")
@@ -910,7 +1004,8 @@ def format_weather_response(
                 f"| {day.get('label') or day.get('date')} | "
                 f"{_norm_temp(day.get('최저기온'))} | "
                 f"{_norm_temp(day.get('최고기온'))} | "
-                f"{day.get('오전날씨') or '-'} | {day.get('오후날씨') or '-'} | "
+                f"{_sky_with_icon(day.get('오전날씨'), day.get('오전아이콘'))} | "
+                f"{_sky_with_icon(day.get('오후날씨'), day.get('오후아이콘'))} | "
                 f"{day.get('오전강수확률') or '-'}/{day.get('오후강수확률') or '-'} |"
             )
 
@@ -941,7 +1036,7 @@ def format_weather_response(
                     f"| {_hour_label(h.get('time', '-'))} | "
                     f"{_norm_temp(h.get('기온'))}"
                     f"({_norm_temp(h.get('체감온도'))}) | "
-                    f"{h.get('날씨') or '-'} | {rain_cell} | {h.get('습도') or '-'} |"
+                    f"{_sky_with_icon(h.get('날씨'), h.get('아이콘'))} | {rain_cell} | {h.get('습도') or '-'} |"
                 )
 
     lines.append("")

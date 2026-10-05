@@ -98,7 +98,11 @@ export function ToolCallCard({ event }: Props) {
       <details className="tool-card plan-card" open>
         <summary>Plan</summary>
         <div className="plan-card-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown
+            // 6F~12F, 2~2.5처럼 범위에 쓰는 단일 ~ 는 그대로 둔다.
+            // 취소선은 ~~텍스트~~ 만 적용한다.
+            remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
+          >
             {event.data ?? ""}
           </ReactMarkdown>
         </div>

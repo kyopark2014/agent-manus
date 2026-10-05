@@ -63,7 +63,9 @@ function filterSupersededTextEvents(events: ToolEvent[], content: string): ToolE
 function MarkdownText({ content }: { content: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      // 6F~12F, 2~2.5처럼 범위에 쓰는 단일 ~ 는 그대로 둔다.
+      // 취소선은 ~~텍스트~~ 만 적용한다.
+      remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
       components={{
         a: ({ href, children, ...props }) => (
           <a href={href} target="_blank" rel="noopener noreferrer" {...props}>

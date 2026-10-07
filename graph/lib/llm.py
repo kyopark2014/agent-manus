@@ -172,7 +172,15 @@ def _completion_kwargs(
     elif temperature is not None and family == "claude":
         # Older Claude via LiteLLM often accepts temperature; try only if set
         # and not a known-strict id. Prefer omitting for haiku/sonnet/opus 4.x+.
-        if not re.search(r"claude-(opus|sonnet|haiku)-4", model.lower()):
+        mid = model.lower()
+        if not (
+            re.search(r"claude-(opus|sonnet|haiku)-4", mid)
+            or "fable" in mid
+            or "claude-sonnet-5" in mid
+            or "claude-5-sonnet" in mid
+            or "claude-opus-5" in mid
+            or "claude-5-opus" in mid
+        ):
             kwargs["temperature"] = temperature
 
     # json_object is OpenAI-oriented; Claude/others often need plain text JSON.

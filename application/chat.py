@@ -870,10 +870,11 @@ def get_chat(**kwargs):
             "model_id": modelId,
             "client": boto3_bedrock,
             "max_tokens": maxOutputTokens,
-            "temperature": 0.1,
             "region_name": bedrock_region,
             "guardrail_config": guardrail_cfg,
         }
+        if not uses_adaptive_thinking(modelId):
+            converse_kwargs["temperature"] = 0.1
         if model_type == "claude":
             converse_kwargs["provider"] = "anthropic"
         converse_chat = ChatBedrockConverse(**converse_kwargs)

@@ -469,7 +469,7 @@ export function ChatInput({
           rows={1}
           placeholder="메시지를 입력하거나 이미지를 붙여넣으세요..."
           value={value}
-          disabled={inputDisabled}
+          disabled={disabled}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
           onCompositionStart={onCompositionStart}
